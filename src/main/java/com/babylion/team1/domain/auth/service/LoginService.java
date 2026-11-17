@@ -20,13 +20,16 @@ public class LoginService {
 	private final CompanyRepository companies;
 	private final UserRepository users;
 	private final JwtTokens tokens;
+	private final RefreshService refreshService;
 	private final BCryptPasswordEncoder passwords = new BCryptPasswordEncoder();
 	private final String dummyHash = passwords.encode(UUID.randomUUID().toString());
 
-	public LoginService(CompanyRepository companies, UserRepository users, @Lazy JwtTokens tokens) {
+	public LoginService(CompanyRepository companies, UserRepository users, @Lazy JwtTokens tokens,
+			RefreshService refreshService) {
 		this.companies = companies;
 		this.users = users;
 		this.tokens = tokens;
+		this.refreshService = refreshService;
 	}
 
 	@Transactional(noRollbackFor = AuthException.class)
@@ -50,6 +53,7 @@ public class LoginService {
 		}
 
 		TokenPair issued = tokens.issue(user.getId());
+		refreshService.register(user, issued, Boolean.TRUE.equals(request.rememberMe()));
 		user.recordSuccessfulLogin(LocalDateTime.now(ZoneOffset.UTC));
 		return new LoginResult(user.getId(), issued);
 	}
