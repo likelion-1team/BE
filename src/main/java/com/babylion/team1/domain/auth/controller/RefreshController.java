@@ -1,10 +1,8 @@
 package com.babylion.team1.domain.auth.controller;
 
 import com.babylion.team1.domain.auth.service.RefreshService;
-import com.babylion.team1.global.auth.AuthException;
 import com.babylion.team1.global.auth.AuthRequestLimiter;
 import jakarta.servlet.http.HttpServletRequest;
-import java.util.Collections;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
@@ -31,10 +29,7 @@ public class RefreshController {
 	@PostMapping
 	public ResponseEntity<RefreshResponse> refresh(HttpServletRequest request,
 			@CookieValue(name = RefreshCookie.NAME, required = false) String refreshToken) {
-		var suppliedOrigins = Collections.list(request.getHeaders(HttpHeaders.ORIGIN));
-		if (suppliedOrigins.size() != 1 || !origins.allows(suppliedOrigins.get(0))) {
-			throw AuthException.invalidOrigin();
-		}
+		origins.requireAllowed(request);
 		limiter.check(request.getRemoteAddr());
 
 		var result = service.refresh(refreshToken);

@@ -13,12 +13,19 @@ final class RefreshCookie {
 	}
 
 	static ResponseCookie create(TokenPair tokens, boolean rememberMe) {
-		var cookie = ResponseCookie.from(NAME, tokens.refreshToken())
-				.httpOnly(true).secure(true).sameSite("Lax").path("/api/v1/auth");
+		var cookie = builder(tokens.refreshToken());
 		if (rememberMe) {
 			long remaining = Duration.between(Instant.now().truncatedTo(ChronoUnit.SECONDS), tokens.refreshExpiresAt()).toSeconds();
 			cookie.maxAge(Math.max(0, remaining));
 		}
 		return cookie.build();
+	}
+
+	static ResponseCookie expired() {
+		return builder("").maxAge(0).build();
+	}
+
+	private static ResponseCookie.ResponseCookieBuilder builder(String value) {
+		return ResponseCookie.from(NAME, value).httpOnly(true).secure(true).sameSite("Lax").path("/api/v1/auth");
 	}
 }

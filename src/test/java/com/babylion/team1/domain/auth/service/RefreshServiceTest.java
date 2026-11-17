@@ -5,8 +5,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+import com.babylion.team1.domain.audit.entity.AuditEventType;
+import com.babylion.team1.domain.audit.repository.AuditLogRepository;
 import com.babylion.team1.domain.auth.entity.RefreshSession;
 import com.babylion.team1.domain.auth.repository.RefreshSessionRepository;
 import com.babylion.team1.domain.company.entity.Company;
@@ -26,7 +30,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 class RefreshServiceTest {
 	private final RefreshSessionRepository sessions = mock(RefreshSessionRepository.class);
 	private final JwtTokens tokens = new JwtTokens(testSecret(), 900_000, 1_209_600_000);
-	private final RefreshService service = new RefreshService(sessions, tokens);
+	private final AuditLogRepository auditLogs = mock(AuditLogRepository.class);
+	private final RefreshService service = new RefreshService(sessions, tokens, auditLogs);
 
 	@Test
 	void rotatesTheStoredHashAndPreservesSessionExpiryAndRememberMe() throws Exception {
@@ -58,6 +63,31 @@ class RefreshServiceTest {
 		var session = session(issued.refreshToken(), Instant.EPOCH);
 		given(sessions.findByTokenHash(session.getTokenHash())).willReturn(Optional.of(session));
 		assertInvalid(issued.refreshToken());
+	}
+
+	@Test
+	void revokesCurrentSessionAndAuditsOnlyOnceWhenRequestIsRetried() throws Exception {
+		var issued = tokens.issue(101);
+		var session = session(issued.refreshToken(), issued.refreshExpiresAt());
+		given(sessions.findByTokenHash(session.getTokenHash()))
+				.willReturn(Optional.of(session)).willReturn(Optional.empty());
+
+		service.revoke(issued.refreshToken());
+		service.revoke(issued.refreshToken());
+
+		verify(sessions).delete(session);
+		verify(auditLogs).save(argThat(log -> log.getEventType() == AuditEventType.LOGOUT
+				&& log.getUser().getId().equals(101L) && log.getDetail() == null));
+		assertInvalid(issued.refreshToken());
+	}
+
+	@Test
+	void expiredSessionDoesNotCreateLogoutAudit() throws Exception {
+		var issued = tokens.issue(101);
+		var session = session(issued.refreshToken(), Instant.EPOCH);
+		given(sessions.findByTokenHash(session.getTokenHash())).willReturn(Optional.of(session));
+		service.revoke(issued.refreshToken());
+		verifyNoInteractions(auditLogs);
 	}
 
 	private void assertInvalid(String token) {
