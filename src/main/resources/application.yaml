@@ -15,3 +15,6 @@ server:
 jwt:
   access-token-expiration: 1800000
   refresh-token-expiration: 1209600000
+  secret: ${JWT_SECRET_BASE64:}
+auth:
+  login-attempts-per-minute: 10

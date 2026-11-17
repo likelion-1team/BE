@@ -43,6 +43,17 @@ public class User {
 	@Column(name = "last_login_at")
 	private LocalDateTime lastLoginAt;
 
+	public void recordFailedLogin() {
+		if (failedLoginCount < Integer.MAX_VALUE) {
+			failedLoginCount++;
+		}
+	}
+
+	public void recordSuccessfulLogin(LocalDateTime loginTime) {
+		failedLoginCount = 0;
+		lastLoginAt = loginTime;
+	}
+
 	@Builder
 	private User(Company company, String employeeNumber, String passwordHash, String userName, RoleType roleType, Integer failedLoginCount, LocalDateTime lastLoginAt) {
 		this.company = company;
