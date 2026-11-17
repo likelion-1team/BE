@@ -1,8 +1,11 @@
 package com.babylion.team1.domain.auth.controller;
 
+import com.babylion.team1.global.auth.AuthException;
+import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -26,8 +29,11 @@ public class RefreshOrigins {
 				.distinct().toList();
 	}
 
-	boolean allows(String origin) {
-		return allowed.contains(origin);
+	void requireAllowed(HttpServletRequest request) {
+		var supplied = Collections.list(request.getHeaders(HttpHeaders.ORIGIN));
+		if (supplied.size() != 1 || !allowed.contains(supplied.get(0))) {
+			throw AuthException.invalidOrigin();
+		}
 	}
 
 	@Bean
@@ -50,7 +56,7 @@ public class RefreshOrigins {
 			}
 		});
 		var registration = new FilterRegistrationBean<>(filter);
-		registration.addUrlPatterns("/api/v1/auth/refresh");
+		registration.addUrlPatterns("/api/v1/auth/refresh", "/api/v1/auth/logout");
 		return registration;
 	}
 }

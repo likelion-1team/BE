@@ -1,5 +1,8 @@
 package com.babylion.team1.domain.auth.service;
 
+import com.babylion.team1.domain.audit.entity.AuditEventType;
+import com.babylion.team1.domain.audit.entity.AuditLog;
+import com.babylion.team1.domain.audit.repository.AuditLogRepository;
 import com.babylion.team1.domain.auth.entity.RefreshSession;
 import com.babylion.team1.domain.auth.repository.RefreshSessionRepository;
 import com.babylion.team1.domain.user.entity.User;
@@ -19,10 +22,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class RefreshService {
 	private final RefreshSessionRepository sessions;
 	private final JwtTokens tokens;
+	private final AuditLogRepository auditLogs;
 
-	public RefreshService(RefreshSessionRepository sessions, @Lazy JwtTokens tokens) {
+	public RefreshService(RefreshSessionRepository sessions, @Lazy JwtTokens tokens, AuditLogRepository auditLogs) {
 		this.sessions = sessions;
 		this.tokens = tokens;
+		this.auditLogs = auditLogs;
 	}
 
 	@Transactional
@@ -46,6 +51,18 @@ public class RefreshService {
 		TokenPair issued = tokens.rotate(userId, session.getExpiresAt());
 		session.rotateTo(hash(issued.refreshToken()));
 		return new RefreshResult(issued, session.isRememberMe());
+	}
+
+	@Transactional
+	public void revoke(String refreshToken) {
+		String currentHash = hash(refreshToken);
+		sessions.findByTokenHash(currentHash)
+				.filter(session -> currentHash.equals(session.getTokenHash()))
+				.filter(session -> session.getExpiresAt().isAfter(Instant.now()))
+				.ifPresent(session -> {
+					sessions.delete(session);
+					auditLogs.save(AuditLog.builder().user(session.getUser()).eventType(AuditEventType.LOGOUT).build());
+				});
 	}
 
 	private static String hash(String token) {
