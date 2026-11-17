@@ -18,3 +18,4 @@ jwt:
   secret: ${JWT_SECRET_BASE64:}
 auth:
   login-attempts-per-minute: 10
+  company-queries-per-minute: 60
