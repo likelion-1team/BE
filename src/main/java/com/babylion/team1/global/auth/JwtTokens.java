@@ -2,8 +2,10 @@ package com.babylion.team1.global.auth;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.UUID;
+import java.util.function.Supplier;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
@@ -41,25 +43,45 @@ public class JwtTokens {
 	}
 
 	public TokenPair issue(long userId) {
+		Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+		return issue(userId, now, now.plus(refreshLifetime));
+	}
+
+	public TokenPair rotate(long userId, Instant refreshExpiresAt) {
 		Instant now = Instant.now();
+		if (!refreshExpiresAt.isAfter(now)) {
+			throw AuthException.invalidRefreshToken();
+		}
+		return issue(userId, now.truncatedTo(ChronoUnit.SECONDS), refreshExpiresAt);
+	}
+
+	private TokenPair issue(long userId, Instant now, Instant refreshExpiresAt) {
 		return new TokenPair(encode(userId, now, accessLifetime, "access"), accessLifetime.toSeconds(),
-				encode(userId, now, refreshLifetime, "refresh"), refreshLifetime);
+				encode(userId, now, Duration.between(now, refreshExpiresAt), "refresh"), refreshExpiresAt);
 	}
 
 	public long readAccessUserId(String token) {
+		return readUserId(token, "access", AuthException::unauthorized);
+	}
+
+	public long readRefreshUserId(String token) {
+		return readUserId(token, "refresh", AuthException::invalidRefreshToken);
+	}
+
+	private long readUserId(String token, String expectedUse, Supplier<AuthException> invalidToken) {
 		try {
 			var jwt = decoder.decode(token);
-			if (!"access".equals(jwt.getClaimAsString("token_use")) || jwt.getExpiresAt() == null
+			if (!expectedUse.equals(jwt.getClaimAsString("token_use")) || jwt.getExpiresAt() == null
 					|| !jwt.getExpiresAt().isAfter(Instant.now())) {
-				throw AuthException.unauthorized();
+				throw invalidToken.get();
 			}
 			long userId = Long.parseLong(jwt.getSubject());
 			if (userId < 1) {
-				throw AuthException.unauthorized();
+				throw invalidToken.get();
 			}
 			return userId;
 		} catch (JwtException | IllegalArgumentException exception) {
-			throw AuthException.unauthorized();
+			throw invalidToken.get();
 		}
 	}
 
@@ -70,10 +92,10 @@ public class JwtTokens {
 				.getTokenValue();
 	}
 
-	public record TokenPair(String accessToken, long expiresIn, String refreshToken, Duration refreshLifetime) {
+	public record TokenPair(String accessToken, long expiresIn, String refreshToken, Instant refreshExpiresAt) {
 		@Override
 		public String toString() {
-			return "TokenPair[expiresIn=" + expiresIn + ", refreshLifetime=" + refreshLifetime + "]";
+			return "TokenPair[expiresIn=" + expiresIn + ", refreshExpiresAt=" + refreshExpiresAt + "]";
 		}
 	}
 }

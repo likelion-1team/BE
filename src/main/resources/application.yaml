@@ -19,3 +19,5 @@ jwt:
 auth:
   login-attempts-per-minute: 10
   company-queries-per-minute: 60
+  refresh-attempts-per-minute: 60
+  refresh-allowed-origins: ${AUTH_REFRESH_ALLOWED_ORIGINS:}

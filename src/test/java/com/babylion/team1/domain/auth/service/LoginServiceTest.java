@@ -13,7 +13,7 @@ import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
 import com.babylion.team1.global.auth.AuthException;
 import com.babylion.team1.global.auth.JwtTokens;
-import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -24,7 +24,7 @@ class LoginServiceTest {
 	private final CompanyRepository companies = mock(CompanyRepository.class);
 	private final UserRepository users = mock(UserRepository.class);
 	private final JwtTokens jwt = mock(JwtTokens.class);
-	private final LoginService service = new LoginService(companies, users, jwt);
+	private final LoginService service = new LoginService(companies, users, jwt, mock(RefreshService.class));
 
 	@Test
 	void sameEmployeeNumberSelectsTheAccountInTheRequestedCompany() {
@@ -34,7 +34,7 @@ class LoginServiceTest {
 		given(companies.findTop2ByCompanyCode("SECOND")).willReturn(List.of(company(2L)));
 		given(users.findTop2ByCompany_IdAndEmployeeNumber(1L, "EMP-1")).willReturn(List.of(first));
 		given(users.findTop2ByCompany_IdAndEmployeeNumber(2L, "EMP-1")).willReturn(List.of(second));
-		var tokens = new JwtTokens.TokenPair("access", 900L, "refresh", Duration.ofDays(14));
+		var tokens = new JwtTokens.TokenPair("access", 900L, "refresh", Instant.EPOCH.plusSeconds(1_209_600));
 		given(jwt.issue(101L)).willReturn(tokens);
 		given(jwt.issue(102L)).willReturn(tokens);
 

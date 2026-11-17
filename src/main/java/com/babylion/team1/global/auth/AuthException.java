@@ -20,6 +20,14 @@ public class AuthException extends RuntimeException {
 		return new AuthException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "로그인 정보가 유효하지 않습니다.");
 	}
 
+	public static AuthException invalidRefreshToken() {
+		return new AuthException(HttpStatus.UNAUTHORIZED, "INVALID_REFRESH_TOKEN", "갱신 토큰이 유효하지 않습니다.");
+	}
+
+	public static AuthException invalidOrigin() {
+		return new AuthException(HttpStatus.FORBIDDEN, "INVALID_ORIGIN", "허용되지 않은 요청 출처입니다.");
+	}
+
 	public static AuthException invalidRequest() {
 		return new AuthException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "요청 정보를 확인해 주세요.");
 	}

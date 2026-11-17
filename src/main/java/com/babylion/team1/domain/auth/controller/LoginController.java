@@ -11,7 +11,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -33,15 +32,10 @@ public class LoginController {
 		limiter.check(httpRequest.getRemoteAddr());
 		var result = loginService.login(request);
 		var tokens = result.tokens();
-		var cookie = ResponseCookie.from("refreshToken", tokens.refreshToken())
-				.httpOnly(true).secure(true).sameSite("Lax").path("/api/v1/auth");
-		if (Boolean.TRUE.equals(request.rememberMe())) {
-			cookie.maxAge(tokens.refreshLifetime());
-		}
 		var body = new LoginResponse(tokens.accessToken(), "Bearer", tokens.expiresIn(),
 				new LoginResponse.UserInfo(Long.toString(result.userId())));
 		return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-				.header(HttpHeaders.SET_COOKIE, cookie.build().toString()).body(body);
+				.header(HttpHeaders.SET_COOKIE, RefreshCookie.create(tokens, Boolean.TRUE.equals(request.rememberMe())).toString()).body(body);
 	}
 
 	@ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class})
