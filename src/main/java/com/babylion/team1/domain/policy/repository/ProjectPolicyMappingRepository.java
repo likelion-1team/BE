@@ -8,6 +8,23 @@ import org.springframework.data.repository.query.Param;
 
 public interface ProjectPolicyMappingRepository extends JpaRepository<ProjectPolicyMapping, Long> {
 
+	/** 현재 페이지의 버전에 대해서만 같은 회사 프로젝트 수를 일괄 집계한다. */
+	@Query("""
+			select m.policyVersion.id as versionId, count(distinct m.project.id) as projectCount
+			from ProjectPolicyMapping m
+			where m.policyVersion.id in :versionIds
+			  and m.policyVersion.policy.company.id = :companyId
+			  and m.project.company.id = :companyId
+			group by m.policyVersion.id
+			""")
+	List<VersionProjectCount> countProjectsByVersionIds(@Param("versionIds") List<Long> versionIds,
+			@Param("companyId") Long companyId);
+
+	interface VersionProjectCount {
+		Long getVersionId();
+		Long getProjectCount();
+	}
+
 	/**
 	 * 대상 프로젝트들에 매핑된 정책 버전을 (버전, 프로젝트) 행 단위로 조회한다.
 	 * 같은 회사 정책만 포함하며, 버전별 projectIds 묶기는 서비스에서 처리한다.
