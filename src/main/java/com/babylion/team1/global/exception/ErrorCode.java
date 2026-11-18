@@ -37,7 +37,9 @@ public enum ErrorCode {
     RECOMMENDATION_ALREADY_DECIDED(HttpStatus.CONFLICT, "RECOMMENDATION_ALREADY_DECIDED", "이미 결정이 기록된 추천입니다."),
 
     // Policy
-    POLICY_ACCESS_DENIED(HttpStatus.FORBIDDEN, "POLICY_ACCESS_DENIED", "정책 조회 권한이 없습니다.");
+    POLICY_ACCESS_DENIED(HttpStatus.FORBIDDEN, "POLICY_ACCESS_DENIED", "정책 조회 권한이 없습니다."),
+    POLICY_NOT_FOUND(HttpStatus.NOT_FOUND, "POLICY_NOT_FOUND", "정책을 찾을 수 없습니다."),
+    POLICY_VERSION_NOT_FOUND(HttpStatus.NOT_FOUND, "POLICY_VERSION_NOT_FOUND", "정책 버전을 찾을 수 없습니다.");
 
     private final HttpStatus status;
     private final String code;
