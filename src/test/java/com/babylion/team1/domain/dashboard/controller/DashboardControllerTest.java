@@ -12,6 +12,8 @@ import com.babylion.team1.domain.dashboard.dto.response.DashboardFilterResponse.
 import com.babylion.team1.domain.dashboard.dto.response.DashboardFilterResponse.PolicyVersionOption;
 import com.babylion.team1.domain.dashboard.dto.response.DashboardFilterResponse.ProjectOption;
 import com.babylion.team1.domain.dashboard.service.DashboardFilterService;
+import com.babylion.team1.domain.dashboard.service.DashboardFlowChartService;
+import com.babylion.team1.domain.user.repository.UserRepository;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
 import java.time.LocalDate;
@@ -38,6 +40,13 @@ class DashboardControllerTest {
 
 	@MockitoBean
 	private DashboardFilterService dashboardFilterService;
+
+	@MockitoBean
+	private DashboardFlowChartService dashboardFlowChartService;
+
+	/** BearerAuthenticationConfig(WebMvcConfigurer)가 의존하므로 컨텍스트 로딩용으로 등록한다. */
+	@MockitoBean
+	private UserRepository userRepository;
 
 	@Test
 	@DisplayName("필터 옵션 조회 성공 시 S200과 명세서 형태의 data를 응답한다")
