@@ -41,6 +41,11 @@ public class PolicyRecommendation {
 	@Column(name = "rejection_reason", columnDefinition = "text")
 	private String rejectionReason;
 
+	/** 책임자의 최종 결정 값 */
+	@Enumerated(EnumType.STRING)
+	@Column(name = "decision_result", length = 20)
+	private DecisionResult decisionResult;
+
 	@Column(name = "detail", columnDefinition = "json")
 	private String detail;
 
@@ -59,13 +64,14 @@ public class PolicyRecommendation {
 	private Integer sampleCount;
 
 	@Builder
-	private PolicyRecommendation(Policy policy, RecommendationStatus status, String observedProblem, String causeCandidate, String nextAction, String rejectionReason, String detail, User decidedBy, LocalDateTime decidedAt, Integer sampleCount) {
+	private PolicyRecommendation(Policy policy, RecommendationStatus status, String observedProblem, String causeCandidate, String nextAction, String rejectionReason, DecisionResult decisionResult, String detail, User decidedBy, LocalDateTime decidedAt, Integer sampleCount) {
 		this.policy = policy;
 		this.status = status;
 		this.observedProblem = observedProblem;
 		this.causeCandidate = causeCandidate;
 		this.nextAction = nextAction;
 		this.rejectionReason = rejectionReason;
+		this.decisionResult = decisionResult;
 		this.detail = detail;
 		this.decidedBy = decidedBy;
 		this.decidedAt = decidedAt;
