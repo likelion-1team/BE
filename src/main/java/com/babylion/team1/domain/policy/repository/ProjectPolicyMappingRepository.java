@@ -25,6 +25,25 @@ public interface ProjectPolicyMappingRepository extends JpaRepository<ProjectPol
 		Long getProjectCount();
 	}
 
+	/** 현재 페이지 버전들의 같은 회사 프로젝트만 중복 없이 조회한다. */
+	@Query("""
+			select distinct m.policyVersion.id as versionId,
+			       m.project.id as projectId, m.project.projectName as projectName
+			from ProjectPolicyMapping m
+			where m.policyVersion.id in :versionIds
+			  and m.policyVersion.policy.company.id = :companyId
+			  and m.project.company.id = :companyId
+			order by m.policyVersion.id, m.project.id
+			""")
+	List<VersionProjectRow> findProjectsByVersionIds(@Param("versionIds") List<Long> versionIds,
+			@Param("companyId") Long companyId);
+
+	interface VersionProjectRow {
+		Long getVersionId();
+		Long getProjectId();
+		String getProjectName();
+	}
+
 	/**
 	 * 대상 프로젝트들에 매핑된 정책 버전을 (버전, 프로젝트) 행 단위로 조회한다.
 	 * 같은 회사 정책만 포함하며, 버전별 projectIds 묶기는 서비스에서 처리한다.

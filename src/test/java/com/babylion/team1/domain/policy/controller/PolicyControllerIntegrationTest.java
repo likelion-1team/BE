@@ -26,6 +26,7 @@ import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.Base64;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +41,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
 
 /** 기존 로컬 MySQL 환경을 사용하며 생성한 테스트 데이터는 매 테스트 후 롤백한다. */
 @SpringBootTest
@@ -67,6 +69,7 @@ class PolicyControllerIntegrationTest {
 	@Autowired private ProjectPolicyMappingRepository mappings;
 	@Autowired private EntityManager entityManager;
 	@Autowired private JdbcTemplate jdbc;
+	@Autowired private ObjectMapper objectMapper;
 
 	private Company company;
 	private User admin;
@@ -218,6 +221,292 @@ class PolicyControllerIntegrationTest {
 					.andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
 					.andExpect(jsonPath("$.errors").isArray());
 		}
+	}
+
+	@Test
+	void historyIncludesAllStatesAuthorAndDistinctCurrentCompanyProjects() throws Exception {
+		mvc.perform(authorized(get(historyUrl()), admin))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.message").value("정책 버전 이력 목록 조회에 성공했습니다"))
+				.andExpect(jsonPath("$.data.policyId").value(active.getPolicy().getId()))
+				.andExpect(jsonPath("$.data.page").value(0))
+				.andExpect(jsonPath("$.data.size").value(20))
+				.andExpect(jsonPath("$.data.totalElements").value(3))
+				.andExpect(jsonPath("$.data.items[*].versionId")
+						.value(contains(draft.getId().intValue(), rolledBack.getId().intValue(), active.getId().intValue())))
+				.andExpect(jsonPath("$.data.items[*].status").value(contains("DRAFT", "ROLLED_BACK", "ACTIVE")))
+				.andExpect(jsonPath("$.data.items[0].projects").isEmpty())
+				.andExpect(jsonPath("$.data.items[0].appliedAt").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.items[2].createdBy.userId").value(admin.getId()))
+				.andExpect(jsonPath("$.data.items[2].createdBy.userName").value("정책 테스트"))
+				.andExpect(jsonPath("$.data.items[2].createdAt").value("2026-11-01T09:00:00"))
+				.andExpect(jsonPath("$.data.items[2].appliedAt").value("2026-11-01T10:00:00"))
+				.andExpect(jsonPath("$.data.items[2].projects[*].projectName").value(contains("A", "B")));
+		assertThat(mappings.findProjectsByVersionIds(List.of(otherVersion.getId()), company.getId())).isEmpty();
+	}
+
+	@Test
+	void historyPaginationUsesCreatedAtThenIdAndCountsVersionsNotMappings() throws Exception {
+		jdbc.update("update policy_version set created_at = ? where version_id = ?",
+				Timestamp.valueOf(LocalDateTime.of(2026, 11, 2, 9, 0)), active.getId());
+		var ordered = List.of(active, draft, rolledBack);
+		for (int page = 0; page < ordered.size(); page++) {
+			mvc.perform(authorized(get(historyUrl()).param("page", Integer.toString(page)).param("size", "1"), admin))
+					.andExpect(status().isOk())
+					.andExpect(jsonPath("$.data.totalElements").value(3))
+					.andExpect(jsonPath("$.data.page").value(page))
+					.andExpect(jsonPath("$.data.size").value(1))
+					.andExpect(jsonPath("$.data.items.length()").value(1))
+					.andExpect(jsonPath("$.data.items[0].versionId").value(ordered.get(page).getId()));
+		}
+		mvc.perform(authorized(get(historyUrl()).param("page", "3").param("size", "1"), admin))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.data.items").isEmpty())
+				.andExpect(jsonPath("$.data.totalElements").value(3));
+	}
+
+	@Test
+	void existingPolicyWithNoVersionsReturnsEmptyHistory() throws Exception {
+		var empty = policies.save(Policy.builder().company(company).taskType("EMPTY").createdBy(admin).build());
+		mvc.perform(authorized(get(URL + "/" + empty.getId() + "/versions").param("size", "100"), admin))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.policyId").value(empty.getId()))
+				.andExpect(jsonPath("$.data.items").isEmpty())
+				.andExpect(jsonPath("$.data.totalElements").value(0));
+	}
+
+	@Test
+	void detailReturnsJsonStructuresDecimalAndUserIdsWithoutChangingStoredVersion() throws Exception {
+		jdbc.update("""
+				update policy_version set confidence_threshold = ?, allowed_tools = ?,
+				quality_time_criteria = ?, exception_conditions = ?, success_definition = ?,
+				default_route = ?, approved_by = ? where version_id = ?
+				""", new java.math.BigDecimal("85.25"), "[\"AI\",\"ERP\"]",
+				"{\"quality\":{\"minimum\":90},\"seconds\":30}", "[{\"route\":\"MANUAL_REVIEW\"}]",
+				"검토 통과", "AI_ERP_DIRECT", admin.getId(), active.getId());
+		entityManager.clear();
+		long mappingCount = mappings.count();
+		long versionCount = versions.count();
+		mvc.perform(authorized(get(detailUrl(active)), admin))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.message").value("특정 정책 버전 상세 조회에 성공했습니다"))
+				.andExpect(jsonPath("$.data.policyId").value(active.getPolicy().getId()))
+				.andExpect(jsonPath("$.data.taskType").value("INVOICE"))
+				.andExpect(jsonPath("$.data.versionId").value(active.getId()))
+				.andExpect(jsonPath("$.data.versionName").value("v1"))
+				.andExpect(jsonPath("$.data.status").value("ACTIVE"))
+				.andExpect(jsonPath("$.data.confidenceThreshold").value(85.25))
+				.andExpect(jsonPath("$.data.allowedTools").value(contains("AI", "ERP")))
+				.andExpect(jsonPath("$.data.qualityTimeCriteria.quality.minimum").value(90))
+				.andExpect(jsonPath("$.data.exceptionConditions[0].route").value("MANUAL_REVIEW"))
+				.andExpect(jsonPath("$.data.successDefinition").value("검토 통과"))
+				.andExpect(jsonPath("$.data.defaultRoute").value("AI_ERP_DIRECT"))
+				.andExpect(jsonPath("$.data.createdBy").value(admin.getId()))
+				.andExpect(jsonPath("$.data.approvedBy").value(admin.getId()))
+				.andExpect(jsonPath("$.data.createdAt").value("2026-11-01T09:00:00"))
+				.andExpect(jsonPath("$.data.appliedAt").value("2026-11-01T10:00:00"));
+		assertThat(mappings.count()).isEqualTo(mappingCount);
+		assertThat(versions.count()).isEqualTo(versionCount);
+		assertThat(versions.findById(active.getId()).orElseThrow().getStatus()).isEqualTo(PolicyVersionStatus.ACTIVE);
+	}
+
+	@Test
+	void draftDetailPreservesSqlNullAndEmptyJsonWithoutDroppingUnapprovedVersion() throws Exception {
+		jdbc.update("update policy_version set quality_time_criteria = ?, exception_conditions = ? where version_id = ?",
+				"{}", "[]", draft.getId());
+		entityManager.clear();
+		mvc.perform(authorized(get(detailUrl(draft)), admin))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.status").value("DRAFT"))
+				.andExpect(jsonPath("$.data.allowedTools").isArray())
+				.andExpect(jsonPath("$.data.allowedTools").isEmpty())
+				.andExpect(jsonPath("$.data.qualityTimeCriteria").isMap())
+				.andExpect(jsonPath("$.data.qualityTimeCriteria").isEmpty())
+				.andExpect(jsonPath("$.data.exceptionConditions").isArray())
+				.andExpect(jsonPath("$.data.exceptionConditions").isEmpty())
+				.andExpect(jsonPath("$.data.confidenceThreshold").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.defaultRoute").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.successDefinition").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.approvedBy").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.appliedAt").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.rolledBackAt").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.rollbackReason").value(org.hamcrest.Matchers.nullValue()));
+	}
+
+	@Test
+	void detailPreservesJsonNullAndSqlNull() throws Exception {
+		jdbc.update("update policy_version set allowed_tools = ?, quality_time_criteria = ? where version_id = ?",
+				"null", "null", draft.getId());
+		entityManager.clear();
+		mvc.perform(authorized(get(detailUrl(draft)), admin))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.allowedTools").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.qualityTimeCriteria").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.exceptionConditions").value(org.hamcrest.Matchers.nullValue()));
+	}
+
+	@Test
+	void rolledBackDetailReturnsRollbackMetadata() throws Exception {
+		jdbc.update("update policy_version set rolled_back_at = ?, rollback_reason = ? where version_id = ?",
+				Timestamp.valueOf(LocalDateTime.of(2026, 11, 3, 12, 0)), "품질 지표 저하", rolledBack.getId());
+		entityManager.clear();
+		mvc.perform(authorized(get(detailUrl(rolledBack)), admin))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.status").value("ROLLED_BACK"))
+				.andExpect(jsonPath("$.data.rolledBackAt").value("2026-11-03T12:00:00"))
+				.andExpect(jsonPath("$.data.rollbackReason").value("품질 지표 저하"));
+	}
+
+	@Test
+	void foreignAndMissingPoliciesHaveSameNotFoundResponseOnBothEndpoints() throws Exception {
+		for (long policyId : List.of(otherVersion.getPolicy().getId(), Long.MAX_VALUE)) {
+			String history = URL + "/" + policyId + "/versions";
+			for (String path : List.of(history, history + "/" + otherVersion.getId())) {
+				mvc.perform(authorized(get(path), admin))
+						.andExpect(status().isNotFound())
+						.andExpect(jsonPath("$.code").value("POLICY_NOT_FOUND"))
+						.andExpect(jsonPath("$.data").value(org.hamcrest.Matchers.nullValue()));
+			}
+		}
+		assertThat(versions.findVersionHistory(otherVersion.getPolicy().getId(), company.getId(),
+				org.springframework.data.domain.PageRequest.of(0, 20))).isEmpty();
+	}
+
+	@Test
+	void detailRejectsWrongPolicyVersionPairsEvenWithinSameCompany() throws Exception {
+		for (long versionId : List.of(support.getId(), otherVersion.getId(), Long.MAX_VALUE)) {
+			mvc.perform(authorized(get(historyUrl() + "/" + versionId), admin))
+					.andExpect(status().isNotFound())
+					.andExpect(jsonPath("$.code").value("POLICY_VERSION_NOT_FOUND"));
+		}
+		assertThat(versions.findVersionDetail(active.getPolicy().getId(), otherVersion.getId(), company.getId())).isEmpty();
+		assertThat(versions.findVersionDetail(otherVersion.getPolicy().getId(), otherVersion.getId(), company.getId())).isEmpty();
+	}
+
+	@Test
+	void versionEndpointsAllowApproverWithoutProjectMembershipButRejectUser() throws Exception {
+		var approver = user(company, RoleType.APPROVER);
+		var ordinary = user(company, RoleType.USER);
+		for (String path : List.of(historyUrl(), detailUrl(active))) {
+			mvc.perform(authorized(get(path), approver)).andExpect(status().isOk());
+			mvc.perform(authorized(get(path), ordinary))
+					.andExpect(status().isForbidden())
+					.andExpect(jsonPath("$.code").value("POLICY_ACCESS_DENIED"));
+		}
+	}
+
+	@Test
+	void versionEndpointsUseExistingBearerAuthentication() throws Exception {
+		for (String path : List.of(historyUrl(), detailUrl(active))) {
+			mvc.perform(get(path)).andExpect(status().isUnauthorized());
+			for (String token : List.of("invalid.token.value", tokens.issue(admin.getId()).refreshToken(),
+					tokens.issue(Long.MAX_VALUE).accessToken())) {
+				mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+						.andExpect(status().isUnauthorized())
+						.andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+			}
+		}
+	}
+
+	@Test
+	void historyRejectsInvalidPageAndOffsetValues() throws Exception {
+		for (String[] invalid : List.of(new String[]{"page", "-1"}, new String[]{"page", "abc"},
+				new String[]{"page", "2147483647"}, new String[]{"size", "0"},
+				new String[]{"size", "101"}, new String[]{"size", "abc"})) {
+			mvc.perform(authorized(get(historyUrl()).param(invalid[0], invalid[1]), admin))
+					.andExpect(status().isBadRequest())
+					.andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+					.andExpect(jsonPath("$.errors").isArray());
+		}
+	}
+
+	@Test
+	void versionEndpointsRejectNonpositiveAndMalformedPathIds() throws Exception {
+		for (String id : List.of("0", "-1")) {
+			for (String path : List.of(URL + "/" + id + "/versions", URL + "/" + id + "/versions/1", historyUrl() + "/" + id)) {
+				mvc.perform(authorized(get(path), admin)).andExpect(status().isBadRequest())
+						.andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+			}
+		}
+		for (String id : List.of("abc", "9223372036854775808")) {
+			for (String path : List.of(URL + "/" + id + "/versions", URL + "/" + id + "/versions/1", historyUrl() + "/" + id)) {
+				mvc.perform(authorized(get(path), admin)).andExpect(status().isBadRequest())
+						.andExpect(jsonPath("$.code").value("INVALID_TYPE"));
+			}
+		}
+	}
+
+	@Test
+	void swaggerDocumentsBothVersionPathsParametersAndBearerScheme() throws Exception {
+		var result = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andReturn();
+		var doc = objectMapper.readTree(result.getResponse().getContentAsString());
+		var history = doc.path("paths").path(URL + "/{policyId}/versions").path("get");
+		var detail = doc.path("paths").path(URL + "/{policyId}/versions/{versionId}").path("get");
+		assertThat(history.isMissingNode()).isFalse();
+		assertThat(detail.isMissingNode()).isFalse();
+		var historyParameters = new ArrayList<String>();
+		for (var parameter : history.path("parameters")) {
+			historyParameters.add(parameter.path("name").asString());
+		}
+		var detailParameters = new ArrayList<String>();
+		for (var parameter : detail.path("parameters")) {
+			detailParameters.add(parameter.path("name").asString());
+		}
+		assertThat(historyParameters).containsExactlyInAnyOrder("policyId", "page", "size");
+		assertThat(detailParameters).containsExactlyInAnyOrder("policyId", "versionId");
+		assertThat(history.path("security").get(0).has("bearerAuth")).isTrue();
+		assertThat(detail.path("security").get(0).has("bearerAuth")).isTrue();
+		assertThat(doc.path("components").path("securitySchemes").path("bearerAuth").path("scheme").asString()).isEqualTo("bearer");
+	}
+
+	@Test
+	void swaggerKeepsPolicyListAndHistoryItemSchemasSeparate() throws Exception {
+		var result = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andReturn();
+		var schemas = objectMapper.readTree(result.getResponse().getContentAsString()).path("components").path("schemas");
+		String listItemRef = schemas.path("PolicyListResponse").path("properties").path("items").path("items").path("$ref").asString();
+		String historyItemRef = schemas.path("PolicyVersionHistoryResponse").path("properties").path("items").path("items").path("$ref").asString();
+		assertThat(historyItemRef).isNotEqualTo(listItemRef);
+		var listItem = schemas.path(listItemRef.substring(listItemRef.lastIndexOf('/') + 1)).path("properties");
+		var historyItem = schemas.path(historyItemRef.substring(historyItemRef.lastIndexOf('/') + 1)).path("properties");
+		assertThat(listItem.has("projectCount")).isTrue();
+		assertThat(listItem.has("projects")).isFalse();
+		assertThat(historyItem.has("createdAt")).isTrue();
+		assertThat(historyItem.has("createdBy")).isTrue();
+		assertThat(historyItem.has("projects")).isTrue();
+		assertThat(historyItem.has("projectCount")).isFalse();
+		String authorRef = historyItem.path("createdBy").path("$ref").asString();
+		String projectRef = historyItem.path("projects").path("items").path("$ref").asString();
+		var author = schemas.path(authorRef.substring(authorRef.lastIndexOf('/') + 1)).path("properties");
+		var project = schemas.path(projectRef.substring(projectRef.lastIndexOf('/') + 1)).path("properties");
+		assertThat(author.has("userId") && author.has("userName")).isTrue();
+		assertThat(project.has("projectId") && project.has("projectName")).isTrue();
+	}
+
+	@Test
+	void swaggerJsonSettingsSupportStoredJsonTypesIncludingArraysAndNull() throws Exception {
+		var result = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andReturn();
+		var properties = objectMapper.readTree(result.getResponse().getContentAsString())
+				.path("components").path("schemas").path("PolicyVersionDetailResponse").path("properties");
+		for (String field : List.of("allowedTools", "qualityTimeCriteria", "exceptionConditions")) {
+			var types = new ArrayList<String>();
+			var type = properties.path(field).path("type");
+			if (type.isArray()) {
+				for (var value : type) {
+					types.add(value.asString());
+				}
+			} else {
+				types.add(type.asString());
+			}
+			assertThat(types).as("%s의 JSON 응답 스키마", field)
+					.containsExactlyInAnyOrder("object", "array", "string", "number", "boolean", "null");
+		}
+	}
+
+	private String historyUrl() {
+		return URL + "/" + active.getPolicy().getId() + "/versions";
+	}
+
+	private String detailUrl(PolicyVersion version) {
+		return URL + "/" + version.getPolicy().getId() + "/versions/" + version.getId();
 	}
 
 	private MockHttpServletRequestBuilder authorized(MockHttpServletRequestBuilder request, User user) {
