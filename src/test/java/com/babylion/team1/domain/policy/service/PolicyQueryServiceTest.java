@@ -9,11 +9,17 @@ import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.babylion.team1.domain.company.entity.Company;
 import com.babylion.team1.domain.policy.dto.request.PolicyListRequest;
+import com.babylion.team1.domain.policy.dto.request.PolicyVersionHistoryRequest;
+import com.babylion.team1.domain.policy.entity.Policy;
+import com.babylion.team1.domain.policy.entity.PolicyVersion;
 import com.babylion.team1.domain.policy.entity.PolicyVersionStatus;
+import com.babylion.team1.domain.policy.repository.PolicyRepository;
 import com.babylion.team1.domain.policy.repository.PolicyVersionRepository;
+import com.babylion.team1.domain.policy.repository.PolicyVersionRepository.PolicyVersionHistoryRow;
 import com.babylion.team1.domain.policy.repository.PolicyVersionRepository.PolicyVersionListRow;
 import com.babylion.team1.domain.policy.repository.ProjectPolicyMappingRepository;
 import com.babylion.team1.domain.policy.repository.ProjectPolicyMappingRepository.VersionProjectCount;
+import com.babylion.team1.domain.policy.repository.ProjectPolicyMappingRepository.VersionProjectRow;
 import com.babylion.team1.domain.user.entity.RoleType;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
@@ -30,12 +36,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.test.util.ReflectionTestUtils;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 @ExtendWith(MockitoExtension.class)
 class PolicyQueryServiceTest {
 	@Mock private UserRepository users;
 	@Mock private PolicyVersionRepository versions;
 	@Mock private ProjectPolicyMappingRepository mappings;
+	@Mock private PolicyRepository policies;
+	@Mock private ObjectMapper objectMapper;
 	@InjectMocks private PolicyQueryService service;
 
 	@Test
@@ -105,6 +115,79 @@ class PolicyQueryServiceTest {
 		assertThat(defaults.statuses()).containsExactly(PolicyVersionStatus.ACTIVE, PolicyVersionStatus.ROLLED_BACK);
 		assertThat(new PolicyListRequest(null, PolicyVersionStatus.DRAFT, 0, 1).statuses())
 				.containsExactly(PolicyVersionStatus.DRAFT);
+	}
+
+	@Test
+	void historyOutsideLastPageKeepsTotalAndSkipsProjectQuery() {
+		givenUser(RoleType.ADMIN);
+		given(policies.existsByIdAndCompany_Id(20L, 10L)).willReturn(true);
+		given(versions.findVersionHistory(20L, 10L, PageRequest.of(3, 2)))
+				.willReturn(new PageImpl<>(List.of(), PageRequest.of(3, 2), 5));
+
+		var response = service.getVersionHistory(1L, 20L, new PolicyVersionHistoryRequest(3, 2));
+		assertThat(response.policyId()).isEqualTo(20);
+		assertThat(response.items()).isEmpty();
+		assertThat(response.page()).isEqualTo(3);
+		assertThat(response.size()).isEqualTo(2);
+		assertThat(response.totalElements()).isEqualTo(5);
+		verifyNoInteractions(mappings);
+	}
+
+	@Test
+	void historyLoadsProjectsForCurrentPageOnceAndUsesEmptyListForUnmappedVersion() {
+		givenUser(RoleType.APPROVER);
+		given(policies.existsByIdAndCompany_Id(20L, 10L)).willReturn(true);
+		var first = mock(PolicyVersionHistoryRow.class);
+		var second = mock(PolicyVersionHistoryRow.class);
+		given(first.getVersionId()).willReturn(101L);
+		given(second.getVersionId()).willReturn(102L);
+		given(versions.findVersionHistory(20L, 10L, PageRequest.of(0, 20)))
+				.willReturn(new PageImpl<>(List.of(first, second)));
+		var project = mock(VersionProjectRow.class);
+		given(project.getVersionId()).willReturn(101L);
+		given(project.getProjectId()).willReturn(30L);
+		given(project.getProjectName()).willReturn("프로젝트 A");
+		given(mappings.findProjectsByVersionIds(List.of(101L, 102L), 10L)).willReturn(List.of(project));
+
+		var response = service.getVersionHistory(1L, 20L, new PolicyVersionHistoryRequest(null, null));
+		assertThat(response.items().get(0).projects()).singleElement().satisfies(value -> {
+			assertThat(value.projectId()).isEqualTo(30);
+			assertThat(value.projectName()).isEqualTo("프로젝트 A");
+		});
+		assertThat(response.items().get(1).projects()).isEmpty();
+		verify(mappings).findProjectsByVersionIds(List.of(101L, 102L), 10L);
+	}
+
+	@Test
+	void historyAndDetailRejectMissingPolicyBeforeQueryingVersions() {
+		givenUser(RoleType.ADMIN);
+		assertThatThrownBy(() -> service.getVersionHistory(1L, 20L, new PolicyVersionHistoryRequest(0, 20)))
+				.isInstanceOfSatisfying(CustomException.class,
+						error -> assertThat(error.getErrorCode()).isEqualTo(ErrorCode.POLICY_NOT_FOUND));
+		assertThatThrownBy(() -> service.getVersionDetail(1L, 20L, 101L))
+				.isInstanceOfSatisfying(CustomException.class,
+						error -> assertThat(error.getErrorCode()).isEqualTo(ErrorCode.POLICY_NOT_FOUND));
+		verifyNoInteractions(versions, mappings);
+	}
+
+	@Test
+	void missingDetailVersionUsesVersionNotFoundCode() {
+		givenUser(RoleType.ADMIN);
+		given(policies.existsByIdAndCompany_Id(20L, 10L)).willReturn(true);
+		assertThatThrownBy(() -> service.getVersionDetail(1L, 20L, 101L))
+				.isInstanceOfSatisfying(CustomException.class,
+						error -> assertThat(error.getErrorCode()).isEqualTo(ErrorCode.POLICY_VERSION_NOT_FOUND));
+		verify(versions).findVersionDetail(20L, 101L, 10L);
+	}
+
+	@Test
+	void malformedStoredJsonIsNotSilentlyReplacedWithEmptySettings() {
+		givenUser(RoleType.ADMIN);
+		given(policies.existsByIdAndCompany_Id(20L, 10L)).willReturn(true);
+		var version = PolicyVersion.builder().policy(Policy.builder().build()).allowedTools("{broken").build();
+		given(versions.findVersionDetail(20L, 101L, 10L)).willReturn(Optional.of(version));
+		var realJsonService = new PolicyQueryService(users, versions, mappings, policies, new ObjectMapper());
+		assertThatThrownBy(() -> realJsonService.getVersionDetail(1L, 20L, 101L)).isInstanceOf(JacksonException.class);
 	}
 
 	private void givenUser(RoleType role) {
