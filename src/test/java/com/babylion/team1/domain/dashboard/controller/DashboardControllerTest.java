@@ -11,6 +11,7 @@ import com.babylion.team1.domain.dashboard.dto.response.DashboardFilterResponse;
 import com.babylion.team1.domain.dashboard.dto.response.DashboardFilterResponse.DateRange;
 import com.babylion.team1.domain.dashboard.dto.response.DashboardFilterResponse.PolicyVersionOption;
 import com.babylion.team1.domain.dashboard.dto.response.DashboardFilterResponse.ProjectOption;
+import com.babylion.team1.domain.dashboard.service.DashboardDecisionService;
 import com.babylion.team1.domain.dashboard.service.DashboardFilterService;
 import com.babylion.team1.domain.dashboard.service.DashboardFlowChartService;
 import com.babylion.team1.domain.user.repository.UserRepository;
@@ -43,6 +44,9 @@ class DashboardControllerTest {
 
 	@MockitoBean
 	private DashboardFlowChartService dashboardFlowChartService;
+
+	@MockitoBean
+	private DashboardDecisionService dashboardDecisionService;
 
 	/** BearerAuthenticationConfig(WebMvcConfigurer)가 의존하므로 컨텍스트 로딩용으로 등록한다. */
 	@MockitoBean
