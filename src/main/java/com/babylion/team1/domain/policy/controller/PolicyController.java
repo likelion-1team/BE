@@ -1,12 +1,15 @@
 package com.babylion.team1.domain.policy.controller;
 
 import com.babylion.team1.domain.policy.dto.request.PolicyListRequest;
+import com.babylion.team1.domain.policy.dto.request.PolicyVersionDraftRequest;
 import com.babylion.team1.domain.policy.dto.request.PolicyVersionHistoryRequest;
 import com.babylion.team1.domain.policy.dto.response.PolicyListResponse;
 import com.babylion.team1.domain.policy.dto.response.PolicyVersionDetailResponse;
 import com.babylion.team1.domain.policy.dto.response.PolicyVersionDiffResponse;
+import com.babylion.team1.domain.policy.dto.response.PolicyVersionDraftResponse;
 import com.babylion.team1.domain.policy.dto.response.PolicyVersionHistoryResponse;
 import com.babylion.team1.domain.policy.service.PolicyQueryService;
+import com.babylion.team1.domain.policy.service.PolicyVersionCommandService;
 import com.babylion.team1.global.auth.AuthenticatedUserId;
 import com.babylion.team1.global.response.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -23,6 +26,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -34,6 +39,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class PolicyController {
 	private final PolicyQueryService policyQueryService;
+	private final PolicyVersionCommandService policyVersionCommandService;
 
 	@Operation(summary = "업무 유형별 정책 목록 조회",
 			description = "ADMIN·APPROVER가 같은 회사의 정책을 버전 단위로 조회합니다. "
@@ -74,6 +80,20 @@ public class PolicyController {
 			@Parameter(description = "정책에 속한 버전 ID", example = "10") @PathVariable @Positive Long versionId) {
 		return ResponseEntity.ok(ApiResponse.success("S200", "특정 정책 버전 상세 조회에 성공했습니다",
 				policyQueryService.getVersionDetail(userId, policyId, versionId)));
+	}
+
+	@Operation(summary = "새 정책 초안 생성",
+			description = "ADMIN·APPROVER가 같은 회사 정책에 새 DRAFT를 생성합니다. "
+					+ "기준 버전은 소속 확인용이며 요청 설정 전체를 저장하고 누락값을 자동 복사하지 않습니다. "
+					+ "기존 버전·프로젝트 매핑을 유지하고 생성 감사 로그를 같은 트랜잭션으로 저장합니다.")
+	@SecurityRequirement(name = "bearerAuth")
+	@PostMapping("/{policyId}/versions")
+	public ResponseEntity<ApiResponse<PolicyVersionDraftResponse>> createDraft(
+			@Parameter(hidden = true) @AuthenticatedUserId Long userId,
+			@Parameter(description = "정책 ID", example = "1") @PathVariable @Positive Long policyId,
+			@Valid @RequestBody PolicyVersionDraftRequest request) {
+		return ResponseEntity.ok(ApiResponse.success("S200", "새 정책 초안 생성에 성공했습니다",
+				policyVersionCommandService.createDraft(userId, policyId, request)));
 	}
 
 	@Operation(summary = "정책 버전 Diff 비교",

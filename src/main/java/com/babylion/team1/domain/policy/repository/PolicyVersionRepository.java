@@ -13,6 +13,8 @@ import org.springframework.data.repository.query.Param;
 
 public interface PolicyVersionRepository extends JpaRepository<PolicyVersion, Long> {
 
+	boolean existsByIdAndPolicy_IdAndPolicy_Company_Id(Long id, Long policyId, Long companyId);
+
 	/** 매핑 조인 없이 버전 단위로 페이지를 조회하여 중복 행과 잘못된 count를 방지한다. */
 	@Query(value = """
 			select p.id as policyId, p.taskType as taskType,
