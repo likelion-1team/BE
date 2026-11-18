@@ -29,7 +29,12 @@ public enum ErrorCode {
     // Dashboard
     NO_ACCESSIBLE_PROJECT(HttpStatus.FORBIDDEN, "NO_ACCESSIBLE_PROJECT", "접근 가능한 프로젝트가 없습니다."),
     PROJECT_ACCESS_DENIED(HttpStatus.FORBIDDEN, "PROJECT_ACCESS_DENIED", "조회 권한이 없는 프로젝트가 포함되어 있습니다."),
-    INVALID_DATE_RANGE(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE", "조회 종료일은 시작일보다 이전일 수 없습니다.");
+    INVALID_DATE_RANGE(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE", "조회 종료일은 시작일보다 이전일 수 없습니다."),
+    DECISION_PERMISSION_DENIED(HttpStatus.FORBIDDEN, "DECISION_PERMISSION_DENIED", "최종 결정을 내릴 권한이 없습니다."),
+    RECOMMENDATION_ACCESS_DENIED(HttpStatus.FORBIDDEN, "RECOMMENDATION_ACCESS_DENIED", "해당 추천에 대한 접근 권한이 없습니다."),
+    DECISION_REASON_REQUIRED(HttpStatus.BAD_REQUEST, "DECISION_REASON_REQUIRED", "시스템 제안과 다른 결정에는 사유(reason)가 필요합니다."),
+    RECOMMENDATION_NOT_FOUND(HttpStatus.NOT_FOUND, "RECOMMENDATION_NOT_FOUND", "정책 추천을 찾을 수 없습니다."),
+    RECOMMENDATION_ALREADY_DECIDED(HttpStatus.CONFLICT, "RECOMMENDATION_ALREADY_DECIDED", "이미 결정이 기록된 추천입니다.");
 
     private final HttpStatus status;
     private final String code;
