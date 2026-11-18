@@ -29,7 +29,10 @@ public enum ErrorCode {
     // Dashboard
     NO_ACCESSIBLE_PROJECT(HttpStatus.FORBIDDEN, "NO_ACCESSIBLE_PROJECT", "접근 가능한 프로젝트가 없습니다."),
     PROJECT_ACCESS_DENIED(HttpStatus.FORBIDDEN, "PROJECT_ACCESS_DENIED", "조회 권한이 없는 프로젝트가 포함되어 있습니다."),
-    INVALID_DATE_RANGE(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE", "조회 종료일은 시작일보다 이전일 수 없습니다.");
+    INVALID_DATE_RANGE(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE", "조회 종료일은 시작일보다 이전일 수 없습니다."),
+
+    // Policy
+    POLICY_ACCESS_DENIED(HttpStatus.FORBIDDEN, "POLICY_ACCESS_DENIED", "정책 조회 권한이 없습니다.");
 
     private final HttpStatus status;
     private final String code;
