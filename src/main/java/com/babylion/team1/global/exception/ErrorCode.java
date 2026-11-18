@@ -38,6 +38,7 @@ public enum ErrorCode {
 
     // Policy
     POLICY_ACCESS_DENIED(HttpStatus.FORBIDDEN, "POLICY_ACCESS_DENIED", "정책 조회 권한이 없습니다."),
+    POLICY_DRAFT_ACCESS_DENIED(HttpStatus.FORBIDDEN, "POLICY_DRAFT_ACCESS_DENIED", "정책 초안 생성 권한이 없습니다."),
     POLICY_NOT_FOUND(HttpStatus.NOT_FOUND, "POLICY_NOT_FOUND", "정책을 찾을 수 없습니다."),
     POLICY_VERSION_NOT_FOUND(HttpStatus.NOT_FOUND, "POLICY_VERSION_NOT_FOUND", "정책 버전을 찾을 수 없습니다.");
 
