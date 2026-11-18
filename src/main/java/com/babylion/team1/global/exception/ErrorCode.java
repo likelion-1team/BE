@@ -27,7 +27,9 @@ public enum ErrorCode {
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "인증 정보가 유효하지 않습니다."),
 
     // Dashboard
-    NO_ACCESSIBLE_PROJECT(HttpStatus.FORBIDDEN, "NO_ACCESSIBLE_PROJECT", "접근 가능한 프로젝트가 없습니다.");
+    NO_ACCESSIBLE_PROJECT(HttpStatus.FORBIDDEN, "NO_ACCESSIBLE_PROJECT", "접근 가능한 프로젝트가 없습니다."),
+    PROJECT_ACCESS_DENIED(HttpStatus.FORBIDDEN, "PROJECT_ACCESS_DENIED", "조회 권한이 없는 프로젝트가 포함되어 있습니다."),
+    INVALID_DATE_RANGE(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE", "조회 종료일은 시작일보다 이전일 수 없습니다.");
 
     private final HttpStatus status;
     private final String code;
