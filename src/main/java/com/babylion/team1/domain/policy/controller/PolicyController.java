@@ -4,6 +4,7 @@ import com.babylion.team1.domain.policy.dto.request.PolicyListRequest;
 import com.babylion.team1.domain.policy.dto.request.PolicyVersionHistoryRequest;
 import com.babylion.team1.domain.policy.dto.response.PolicyListResponse;
 import com.babylion.team1.domain.policy.dto.response.PolicyVersionDetailResponse;
+import com.babylion.team1.domain.policy.dto.response.PolicyVersionDiffResponse;
 import com.babylion.team1.domain.policy.dto.response.PolicyVersionHistoryResponse;
 import com.babylion.team1.domain.policy.service.PolicyQueryService;
 import com.babylion.team1.global.auth.AuthenticatedUserId;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Policy", description = "정책 관리자 API")
@@ -72,5 +74,20 @@ public class PolicyController {
 			@Parameter(description = "정책에 속한 버전 ID", example = "10") @PathVariable @Positive Long versionId) {
 		return ResponseEntity.ok(ApiResponse.success("S200", "특정 정책 버전 상세 조회에 성공했습니다",
 				policyQueryService.getVersionDetail(userId, policyId, versionId)));
+	}
+
+	@Operation(summary = "정책 버전 Diff 비교",
+			description = "ADMIN·APPROVER가 같은 회사·같은 정책에 속한 두 버전의 설정 6개를 비교합니다. "
+					+ "JSON 객체 키 순서는 무시하고 배열 순서는 구분하며 숫자는 값으로 비교합니다. "
+					+ "중첩 변경은 최상위 설정 필드 전체로 반환하고 같은 버전·변경 없음은 changes=[]입니다.")
+	@SecurityRequirement(name = "bearerAuth")
+	@GetMapping("/{policyId}/versions/diff")
+	public ResponseEntity<ApiResponse<PolicyVersionDiffResponse>> getVersionDiff(
+			@Parameter(hidden = true) @AuthenticatedUserId Long userId,
+			@Parameter(description = "정책 ID", example = "1") @PathVariable @Positive Long policyId,
+			@Parameter(description = "기준 버전 ID", example = "10") @RequestParam @Positive Long baseId,
+			@Parameter(description = "비교 버전 ID", example = "11") @RequestParam @Positive Long targetId) {
+		return ResponseEntity.ok(ApiResponse.success("S200", "정책 버전 Diff 비교에 성공했습니다",
+				policyQueryService.getVersionDiff(userId, policyId, baseId, targetId)));
 	}
 }
