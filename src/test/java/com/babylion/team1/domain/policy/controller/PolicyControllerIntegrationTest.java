@@ -501,6 +501,174 @@ class PolicyControllerIntegrationTest {
 		}
 	}
 
+	@Test
+	void diffReturnsAllSettingsInFixedOrderWithoutChangingDatabase() throws Exception {
+		jdbc.update("""
+				update policy_version set confidence_threshold = ?, allowed_tools = ?, success_definition = ?,
+				quality_time_criteria = ?, exception_conditions = ?, default_route = ? where version_id = ?
+				""", new java.math.BigDecimal("85.25"), "[\"AI\",\"ERP\"]", "검토 통과", "{}", "[]", "LLM", draft.getId());
+		entityManager.clear();
+		var before = jdbc.queryForList("select * from policy_version where policy_id = ? order by version_id", active.getPolicy().getId());
+		long mappingCount = mappings.count();
+		Long auditCount = jdbc.queryForObject("select count(*) from audit_log", Long.class);
+		mvc.perform(authorized(diffRequest(active.getId(), draft.getId()), admin))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.code").value("S200"))
+				.andExpect(jsonPath("$.message").value("정책 버전 Diff 비교에 성공했습니다"))
+				.andExpect(jsonPath("$.data.policyId").value(active.getPolicy().getId()))
+				.andExpect(jsonPath("$.data.baseId").value(active.getId()))
+				.andExpect(jsonPath("$.data.targetId").value(draft.getId()))
+				.andExpect(jsonPath("$.data.changes[*].field").value(contains("confidenceThreshold", "allowedTools",
+						"successDefinition", "qualityTimeCriteria", "exceptionConditions", "defaultRoute")))
+				.andExpect(jsonPath("$.data.changes[0].baseValue").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.changes[0].targetValue").value(85.25))
+				.andExpect(jsonPath("$.data.changes[1].baseValue").isArray())
+				.andExpect(jsonPath("$.data.changes[1].targetValue").value(contains("AI", "ERP")))
+				.andExpect(jsonPath("$.data.changes[2].targetValue").value("검토 통과"))
+				.andExpect(jsonPath("$.data.changes[3].targetValue").isMap())
+				.andExpect(jsonPath("$.data.changes[4].targetValue").isArray())
+				.andExpect(jsonPath("$.data.changes[5].targetValue").value("LLM"));
+		assertThat(jdbc.queryForList("select * from policy_version where policy_id = ? order by version_id", active.getPolicy().getId()))
+				.isEqualTo(before);
+		assertThat(mappings.count()).isEqualTo(mappingCount);
+		assertThat(jdbc.queryForObject("select count(*) from audit_log", Long.class)).isEqualTo(auditCount);
+	}
+
+	@Test
+	void diffTreatsEquivalentJsonAndMetadataAsUnchangedIncludingSameVersion() throws Exception {
+		jdbc.update("update policy_version set confidence_threshold = ?, quality_time_criteria = ? where version_id = ?",
+				new java.math.BigDecimal("80.00"), "{\"a\":[1,{\"n\":2.0}],\"enabled\":true}", active.getId());
+		jdbc.update("update policy_version set confidence_threshold = ?, quality_time_criteria = ? where version_id = ?",
+				new java.math.BigDecimal("80.00"), "{\"enabled\":true,\"a\":[1.0,{\"n\":2}]}", draft.getId());
+		entityManager.clear();
+		mvc.perform(authorized(diffRequest(active.getId(), draft.getId()), admin))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.data.changes").isEmpty());
+		mvc.perform(authorized(diffRequest(active.getId(), active.getId()), admin))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.data.changes").isEmpty());
+		mvc.perform(authorized(get(detailUrl(active)), admin)).andExpect(status().isOk());
+	}
+
+	@Test
+	void diffDistinguishesArrayOrderNullAndEmptyStructures() throws Exception {
+		jdbc.update("update policy_version set allowed_tools = ?, exception_conditions = ? where version_id = ?",
+				"[\"AI\",\"ERP\"]", "null", active.getId());
+		jdbc.update("update policy_version set allowed_tools = ?, quality_time_criteria = ?, exception_conditions = ? where version_id = ?",
+				"[\"ERP\",\"AI\"]", "{}", "[]", draft.getId());
+		entityManager.clear();
+		mvc.perform(authorized(diffRequest(active.getId(), draft.getId()), admin))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.changes[*].field").value(contains("allowedTools", "qualityTimeCriteria", "exceptionConditions")))
+				.andExpect(jsonPath("$.data.changes[0].baseValue").value(contains("AI", "ERP")))
+				.andExpect(jsonPath("$.data.changes[0].targetValue").value(contains("ERP", "AI")))
+				.andExpect(jsonPath("$.data.changes[1].baseValue").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.changes[1].targetValue").isMap())
+				.andExpect(jsonPath("$.data.changes[2].baseValue").value(org.hamcrest.Matchers.nullValue()))
+				.andExpect(jsonPath("$.data.changes[2].targetValue").isArray());
+	}
+
+	@Test
+	void diffChecksPolicyCompanyBeforeVersions() throws Exception {
+		for (long policyId : List.of(otherVersion.getPolicy().getId(), Long.MAX_VALUE)) {
+			mvc.perform(authorized(get(URL + "/" + policyId + "/versions/diff")
+					.param("baseId", otherVersion.getId().toString()).param("targetId", otherVersion.getId().toString()), admin))
+					.andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("POLICY_NOT_FOUND"));
+		}
+	}
+
+	@Test
+	void diffRejectsWrongPolicyAndForeignVersionInEitherPosition() throws Exception {
+		for (long versionId : List.of(support.getId(), otherVersion.getId(), Long.MAX_VALUE)) {
+			mvc.perform(authorized(diffRequest(versionId, active.getId()), admin))
+					.andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("POLICY_VERSION_NOT_FOUND"));
+			mvc.perform(authorized(diffRequest(active.getId(), versionId), admin))
+					.andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("POLICY_VERSION_NOT_FOUND"));
+		}
+		mvc.perform(authorized(diffRequest(Long.MAX_VALUE, Long.MAX_VALUE), admin))
+				.andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("POLICY_VERSION_NOT_FOUND"));
+	}
+
+	@Test
+	void diffUsesExistingRolesAndBearerAuthentication() throws Exception {
+		mvc.perform(authorized(diffRequest(active.getId(), draft.getId()), user(company, RoleType.APPROVER)))
+				.andExpect(status().isOk());
+		mvc.perform(authorized(diffRequest(active.getId(), draft.getId()), user(company, RoleType.USER)))
+				.andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("POLICY_ACCESS_DENIED"));
+		mvc.perform(diffRequest(active.getId(), draft.getId())).andExpect(status().isUnauthorized());
+		for (String token : List.of("invalid.token.value", tokens.issue(admin.getId()).refreshToken(),
+				tokens.issue(Long.MAX_VALUE).accessToken())) {
+			mvc.perform(diffRequest(active.getId(), draft.getId()).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+					.andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+		}
+	}
+
+	@Test
+	void diffRejectsMissingInvalidAndNonpositiveInputs() throws Exception {
+		for (var request : List.of(get(historyUrl() + "/diff"),
+				get(historyUrl() + "/diff").param("baseId", active.getId().toString()),
+				get(historyUrl() + "/diff").param("targetId", draft.getId().toString()),
+				get(historyUrl() + "/diff").param("baseId", "").param("targetId", draft.getId().toString()))) {
+			mvc.perform(authorized(request, admin)).andExpect(status().isBadRequest())
+					.andExpect(jsonPath("$.code").value("MISSING_PARAMETER"));
+		}
+		for (String id : List.of("0", "-1", "abc", "9223372036854775808")) {
+			String code = id.equals("0") || id.equals("-1") ? "INVALID_REQUEST" : "INVALID_TYPE";
+			var badPolicy = get(URL + "/" + id + "/versions/diff")
+					.param("baseId", active.getId().toString()).param("targetId", draft.getId().toString());
+			var badBase = get(historyUrl() + "/diff").param("baseId", id).param("targetId", draft.getId().toString());
+			var badTarget = get(historyUrl() + "/diff").param("baseId", active.getId().toString()).param("targetId", id);
+			for (var request : List.of(badPolicy, badBase, badTarget)) {
+				mvc.perform(authorized(request, admin)).andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value(code));
+			}
+		}
+	}
+
+	@Test
+	void diffReturnsOneWholeFieldForNestedChangeAndPreservesJsonValues() throws Exception {
+		jdbc.update("update policy_version set quality_time_criteria = ? where version_id = ?",
+				"{\"nested\":{\"limit\":10},\"keep\":true}", active.getId());
+		jdbc.update("update policy_version set quality_time_criteria = ? where version_id = ?",
+				"{\"nested\":{\"limit\":11},\"keep\":true}", draft.getId());
+		entityManager.clear();
+		mvc.perform(authorized(diffRequest(active.getId(), draft.getId()), admin))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.changes.length()").value(1))
+				.andExpect(jsonPath("$.data.changes[0].field").value("qualityTimeCriteria"))
+				.andExpect(jsonPath("$.data.changes[0].baseValue.nested.limit").value(10))
+				.andExpect(jsonPath("$.data.changes[0].targetValue.nested.limit").value(11))
+				.andExpect(jsonPath("$.data.changes[0].targetValue.keep").value(true));
+	}
+
+	@Test
+	void swaggerDocumentsDiffStaticRouteAndJsonChangeSchema() throws Exception {
+		var result = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andReturn();
+		var doc = objectMapper.readTree(result.getResponse().getContentAsString());
+		var operation = doc.path("paths").path(URL + "/{policyId}/versions/diff").path("get");
+		assertThat(operation.isMissingNode()).isFalse();
+		var parameters = new ArrayList<String>();
+		for (var parameter : operation.path("parameters")) {
+			parameters.add(parameter.path("name").asString());
+			assertThat(parameter.path("required").asBoolean()).isTrue();
+		}
+		assertThat(parameters).containsExactlyInAnyOrder("policyId", "baseId", "targetId");
+		assertThat(operation.path("security").get(0).has("bearerAuth")).isTrue();
+		var schemas = doc.path("components").path("schemas");
+		assertThat(schemas.path("PolicyVersionDiffResponse").path("properties").path("changes").path("items").path("$ref").asString())
+				.isEqualTo("#/components/schemas/PolicyVersionDiffChange");
+		var properties = schemas.path("PolicyVersionDiffChange").path("properties");
+		assertThat(properties.has("field")).isTrue();
+		for (String field : List.of("baseValue", "targetValue")) {
+			var types = new ArrayList<String>();
+			for (var type : properties.path(field).path("type")) {
+				types.add(type.asString());
+			}
+			assertThat(types).containsExactlyInAnyOrder("object", "array", "string", "number", "boolean", "null");
+		}
+	}
+
+	private MockHttpServletRequestBuilder diffRequest(long baseId, long targetId) {
+		return get(historyUrl() + "/diff").param("baseId", Long.toString(baseId)).param("targetId", Long.toString(targetId));
+	}
+
 	private String historyUrl() {
 		return URL + "/" + active.getPolicy().getId() + "/versions";
 	}

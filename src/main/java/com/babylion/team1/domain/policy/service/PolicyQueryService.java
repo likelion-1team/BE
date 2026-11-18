@@ -4,9 +4,12 @@ import com.babylion.team1.domain.policy.dto.request.PolicyListRequest;
 import com.babylion.team1.domain.policy.dto.request.PolicyVersionHistoryRequest;
 import com.babylion.team1.domain.policy.dto.response.PolicyListResponse;
 import com.babylion.team1.domain.policy.dto.response.PolicyVersionDetailResponse;
+import com.babylion.team1.domain.policy.dto.response.PolicyVersionDiffResponse;
+import com.babylion.team1.domain.policy.dto.response.PolicyVersionDiffResponse.Change;
 import com.babylion.team1.domain.policy.dto.response.PolicyVersionHistoryResponse;
 import com.babylion.team1.domain.policy.dto.response.PolicyVersionHistoryResponse.Author;
 import com.babylion.team1.domain.policy.dto.response.PolicyVersionHistoryResponse.Project;
+import com.babylion.team1.domain.policy.entity.PolicyVersion;
 import com.babylion.team1.domain.policy.repository.PolicyRepository;
 import com.babylion.team1.domain.policy.repository.PolicyVersionRepository;
 import com.babylion.team1.domain.policy.repository.PolicyVersionRepository.PolicyVersionHistoryRow;
@@ -19,6 +22,7 @@ import com.babylion.team1.domain.user.repository.UserRepository;
 import com.babylion.team1.global.auth.AuthException;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -26,6 +30,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -75,14 +80,54 @@ public class PolicyQueryService {
 	public PolicyVersionDetailResponse getVersionDetail(Long userId, Long policyId, Long versionId) {
 		Long companyId = requireCompanyId(userId);
 		requirePolicy(policyId, companyId);
-		var version = versions.findVersionDetail(policyId, versionId, companyId)
-				.orElseThrow(() -> new CustomException(ErrorCode.POLICY_VERSION_NOT_FOUND));
+		var version = requireVersion(policyId, versionId, companyId);
 		return new PolicyVersionDetailResponse(version.getPolicy().getId(), version.getPolicy().getTaskType(),
 				version.getId(), version.getVersionName(), version.getStatus(), version.getConfidenceThreshold(),
 				parseJson(version.getAllowedTools()), version.getSuccessDefinition(), parseJson(version.getQualityTimeCriteria()),
 				parseJson(version.getExceptionConditions()), version.getDefaultRoute(), version.getCreatedBy().getId(),
 				version.getCreatedAt(), version.getApprovedBy() == null ? null : version.getApprovedBy().getId(),
 				version.getAppliedAt(), version.getRolledBackAt(), version.getRollbackReason());
+	}
+
+	public PolicyVersionDiffResponse getVersionDiff(Long userId, Long policyId, Long baseId, Long targetId) {
+		Long companyId = requireCompanyId(userId);
+		requirePolicy(policyId, companyId);
+		var base = requireVersion(policyId, baseId, companyId);
+		var target = baseId.equals(targetId) ? base : requireVersion(policyId, targetId, companyId);
+		var changes = new ArrayList<Change>();
+		addChange(changes, "confidenceThreshold", objectMapper.valueToTree(base.getConfidenceThreshold()),
+				objectMapper.valueToTree(target.getConfidenceThreshold()));
+		addChange(changes, "allowedTools", parseDiffJson(base.getAllowedTools()), parseDiffJson(target.getAllowedTools()));
+		addChange(changes, "successDefinition", objectMapper.valueToTree(base.getSuccessDefinition()),
+				objectMapper.valueToTree(target.getSuccessDefinition()));
+		addChange(changes, "qualityTimeCriteria", parseDiffJson(base.getQualityTimeCriteria()), parseDiffJson(target.getQualityTimeCriteria()));
+		addChange(changes, "exceptionConditions", parseDiffJson(base.getExceptionConditions()), parseDiffJson(target.getExceptionConditions()));
+		addChange(changes, "defaultRoute", objectMapper.valueToTree(base.getDefaultRoute()), objectMapper.valueToTree(target.getDefaultRoute()));
+		return new PolicyVersionDiffResponse(policyId, baseId, targetId, List.copyOf(changes));
+	}
+
+	private void addChange(List<Change> changes, String field, JsonNode base, JsonNode target) {
+		// Jackson의 구조 비교는 객체 키 순서를 무시하고 배열 순서를 보존한다.
+		boolean equal = base.equals((left, right) -> {
+			if (left.isNumber() && right.isNumber()) {
+				return left.decimalValue().compareTo(right.decimalValue());
+			}
+			return left.equals(right) ? 0 : 1;
+		}, target);
+		if (!equal) {
+			changes.add(new Change(field, base, target));
+		}
+	}
+
+	private JsonNode parseDiffJson(String value) {
+		// 소수를 BigDecimal로 읽어 double 반올림에 따른 변경 누락을 막는다.
+		return value == null ? objectMapper.valueToTree(null)
+				: objectMapper.reader().with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(value);
+	}
+
+	private PolicyVersion requireVersion(Long policyId, Long versionId, Long companyId) {
+		return versions.findVersionDetail(policyId, versionId, companyId)
+				.orElseThrow(() -> new CustomException(ErrorCode.POLICY_VERSION_NOT_FOUND));
 	}
 
 	private JsonNode parseJson(String value) {
