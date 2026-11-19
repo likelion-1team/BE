@@ -187,7 +187,7 @@ class PolicyRecommendationControllerIntegrationTest {
 				.andExpect(jsonPath("$.data.decidedBy").value(nullValue()))
 				.andExpect(jsonPath("$.data.decidedAt").value(nullValue()))
 				.andExpect(jsonPath("$.data.decisionResult").doesNotExist())
-				.andExpect(jsonPath("$.data.versionId").doesNotExist());
+				.andExpect(jsonPath("$.data.versionId").value(nullValue()));
 	}
 
 	@Test
@@ -345,7 +345,7 @@ class PolicyRecommendationControllerIntegrationTest {
 		}
 		var properties = schemas.path("PolicyRecommendationDetailResponse").path("properties");
 		for (String field : List.of("recommendationId", "policyId", "status", "observedProblem", "causeCandidate", "nextAction", "detail",
-				"sampleCount", "rejectionReason", "decidedBy", "decidedAt", "createdAt")) {
+				"sampleCount", "rejectionReason", "decidedBy", "decidedAt", "createdAt", "versionId")) {
 			assertThat(properties.has(field)).as(field).isTrue();
 		}
 		assertThat(properties.has("decisionResult")).isFalse();
