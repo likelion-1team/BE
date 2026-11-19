@@ -9,5 +9,6 @@ public record PolicyRecommendationDetailResponse(Long recommendationId, Long pol
 		String observedProblem, String causeCandidate, String nextAction,
 		@Schema(description = "저장된 JSON 구조 또는 null (내부 키·타입은 생산 계약에 따름)", implementation = Object.class,
 				types = {"object", "array", "string", "number", "boolean", "null"}) JsonNode detail,
-		Integer sampleCount, String rejectionReason, Long decidedBy, LocalDateTime decidedAt, LocalDateTime createdAt) {
+		Integer sampleCount, String rejectionReason, Long decidedBy, LocalDateTime decidedAt, LocalDateTime createdAt,
+		@Schema(description = "정책 추천 승인으로 생성한 버전 ID (반려·대시보드 결정·기존 미연결 기록은 null)") Long versionId) {
 }
