@@ -74,6 +74,12 @@ public class PolicyVersion {
 	@Column(name = "default_route", length = 30)
 	private RouteType defaultRoute;
 
+	public void apply(User approver, LocalDateTime time) {
+		this.status = PolicyVersionStatus.ACTIVE;
+		this.approvedBy = approver;
+		this.appliedAt = time;
+	}
+
 	@Builder
 	private PolicyVersion(Policy policy, String versionName, PolicyVersionStatus status, BigDecimal confidenceThreshold, User approvedBy, LocalDateTime appliedAt, String allowedTools, String successDefinition, String qualityTimeCriteria, String exceptionConditions, User createdBy, LocalDateTime rolledBackAt, String rollbackReason, RouteType defaultRoute) {
 		this.policy = policy;
