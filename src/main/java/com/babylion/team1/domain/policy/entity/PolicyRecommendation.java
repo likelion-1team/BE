@@ -11,7 +11,8 @@ import org.hibernate.annotations.CreationTimestamp;
 
 /** 정책 변경 추천 */
 @Entity
-@Table(name = "policy_recommendation")
+@Table(name = "policy_recommendation", uniqueConstraints =
+		@UniqueConstraint(name = "uk_policy_recommendation_generated_version", columnNames = "generated_version_id"))
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class PolicyRecommendation {
@@ -59,6 +60,11 @@ public class PolicyRecommendation {
 
 	@Column(name = "decided_at")
 	private LocalDateTime decidedAt;
+
+	/** 정책 추천 승인으로 생성한 초안. 대시보드 결정·반려·기존 기록에는 없을 수 있다. */
+	@OneToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "generated_version_id", foreignKey = @ForeignKey(name = "fk_policy_recommendation_generated_version"))
+	private PolicyVersion generatedVersion;
 
 	@Column(name = "sample_count", nullable = false)
 	private Integer sampleCount;

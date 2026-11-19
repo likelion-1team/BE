@@ -357,6 +357,52 @@ class PolicyVersionDraftControllerIntegrationTest {
 	}
 
 	@Test
+	void unsupportedJsonNumbersAreRejectedBeforeWriting() throws Exception {
+		long before = versions.count();
+		for (String field : List.of("allowedTools", "qualityTimeCriteria", "exceptionConditions")) {
+			for (String number : List.of("9".repeat(400), "-" + "9".repeat(400), "1e309", "-1e309")) {
+				var body = minimal(); body.put(field, "__RAW_JSON__");
+				String value = number.startsWith("-") ? "{\"nested\":[" + number + "]}" : number;
+				String rawBody = mapper.writeValueAsString(body).replace("\"__RAW_JSON__\"", value);
+				mvc.perform(post(url()).header(HttpHeaders.AUTHORIZATION, bearer(admin)).contentType(MediaType.APPLICATION_JSON).content(rawBody))
+						.andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+						.andExpect(jsonPath("$.errors[0].reason").value("JSON 숫자는 MySQL JSON에 저장 가능한 유한한 double 범위여야 합니다."));
+			}
+		}
+		assertThat(versions.count()).isEqualTo(before);
+		assertThat(jdbc.queryForObject("select count(*) from audit_log where user_id = ?", Long.class, admin.getId())).isZero();
+	}
+
+	@Test
+	void supportedJsonNumberBoundariesAndNumericLookingStringsCanBeStored() throws Exception {
+		String largestInteger = new java.math.BigDecimal(Double.MAX_VALUE).toBigInteger().toString();
+		for (String field : List.of("allowedTools", "qualityTimeCriteria", "exceptionConditions")) {
+			for (String value : List.of(largestInteger, "-" + largestInteger, "1.7976931348623157e308", "-1.7976931348623157e308", "4.9e-324",
+					"18446744073709551615", "-9223372036854775808", "0", "\"Infinity\"", "\"" + "9".repeat(400) + "\"")) {
+				var body = minimal(); body.set(field, mapper.readTree(value));
+				long id = createdId(create(body, admin).andExpect(status().isOk()));
+				String column = switch (field) {
+					case "allowedTools" -> "allowed_tools";
+					case "qualityTimeCriteria" -> "quality_time_criteria";
+					default -> "exception_conditions";
+				};
+				var stored = mapper.readTree(jdbc.queryForObject("select " + column + " from policy_version where version_id = ?", String.class, id));
+				if (value.startsWith("\"")) {
+					assertThat(stored.isString()).isTrue();
+					assertThat(stored.asString()).isEqualTo(mapper.readTree(value).asString());
+				} else {
+					assertThat(stored.isNumber()).isTrue();
+					// 64비트 밖 정수는 MySQL JSON이 double로 저장하므로 정확한 정수 보존을 요구하지 않는다.
+					assertThat(Double.isFinite(stored.numberValue().doubleValue())).isTrue();
+					if (!value.equals(largestInteger) && !value.equals("-" + largestInteger)) {
+						assertThat(stored.numberValue().doubleValue()).isEqualTo(mapper.readTree(value).numberValue().doubleValue());
+					}
+				}
+			}
+		}
+	}
+
+	@Test
 	void swaggerIncludesDraftRequestResponseAndPreciseJsonTypes() throws Exception {
 		var result = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andReturn();
 		var doc = mapper.readTree(result.getResponse().getContentAsString());
@@ -375,7 +421,7 @@ class PolicyVersionDraftControllerIntegrationTest {
 		assertThat(types).containsExactlyInAnyOrder("object", "array", "string", "number", "boolean");
 		for (String field : List.of("allowedTools", "qualityTimeCriteria", "exceptionConditions")) {
 			assertThat(request.path("properties").path(field).path("description").asString())
-					.contains("객체·배열 중첩 최대 100단계", "요청 본문과 마지막 스칼라는 제외");
+					.contains("객체·배열 중첩 최대 100단계", "요청 본문과 마지막 스칼라는 제외", "JSON 숫자는 유한한 double 범위");
 		}
 		var response = schemas.path("PolicyVersionDraftResponse").path("properties");
 		for (String field : List.of("policyId", "versionId", "versionName", "status", "createdBy", "createdAt")) {

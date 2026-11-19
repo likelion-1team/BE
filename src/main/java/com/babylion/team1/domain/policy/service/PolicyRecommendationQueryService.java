@@ -45,7 +45,8 @@ public class PolicyRecommendationQueryService {
 						: objectMapper.reader().with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(recommendation.getDetail()),
 				recommendation.getSampleCount(), recommendation.getRejectionReason(),
 				recommendation.getDecidedBy() == null ? null : recommendation.getDecidedBy().getId(),
-				recommendation.getDecidedAt(), recommendation.getCreatedAt());
+				recommendation.getDecidedAt(), recommendation.getCreatedAt(),
+				recommendation.getGeneratedVersion() == null ? null : recommendation.getGeneratedVersion().getId());
 	}
 
 	private Long requireCompanyId(Long userId) {
