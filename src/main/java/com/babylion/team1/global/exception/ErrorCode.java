@@ -40,7 +40,10 @@ public enum ErrorCode {
     POLICY_ACCESS_DENIED(HttpStatus.FORBIDDEN, "POLICY_ACCESS_DENIED", "정책 조회 권한이 없습니다."),
     POLICY_DRAFT_ACCESS_DENIED(HttpStatus.FORBIDDEN, "POLICY_DRAFT_ACCESS_DENIED", "정책 초안 생성 권한이 없습니다."),
     POLICY_NOT_FOUND(HttpStatus.NOT_FOUND, "POLICY_NOT_FOUND", "정책을 찾을 수 없습니다."),
-    POLICY_VERSION_NOT_FOUND(HttpStatus.NOT_FOUND, "POLICY_VERSION_NOT_FOUND", "정책 버전을 찾을 수 없습니다.");
+    POLICY_VERSION_NOT_FOUND(HttpStatus.NOT_FOUND, "POLICY_VERSION_NOT_FOUND", "정책 버전을 찾을 수 없습니다."),
+    POLICY_APPLY_ACCESS_DENIED(HttpStatus.FORBIDDEN, "POLICY_APPLY_ACCESS_DENIED", "정책 적용 권한이 없습니다."),
+    POLICY_APPLY_PROJECT_NOT_FOUND(HttpStatus.NOT_FOUND, "POLICY_APPLY_PROJECT_NOT_FOUND", "적용 대상 프로젝트를 찾을 수 없습니다."),
+    POLICY_APPLY_CONFLICT(HttpStatus.CONFLICT, "POLICY_APPLY_CONFLICT", "정책 적용 상태 또는 현재 매핑을 확인해 주세요.");
 
     private final HttpStatus status;
     private final String code;

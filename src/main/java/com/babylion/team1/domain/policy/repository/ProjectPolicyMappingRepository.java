@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ProjectPolicyMappingRepository extends JpaRepository<ProjectPolicyMapping, Long> {
+	@Query("select m from ProjectPolicyMapping m join fetch m.project join fetch m.policyVersion v where v.policy.id = :policyId and m.project.id in :projectIds")
+	List<ProjectPolicyMapping> findCurrentForProjects(@Param("policyId") Long policyId, @Param("projectIds") List<Long> projectIds);
 
 	/** 현재 페이지의 버전에 대해서만 같은 회사 프로젝트 수를 일괄 집계한다. */
 	@Query("""

@@ -27,6 +27,10 @@ public class ProjectPolicyMapping {
 	@JoinColumn(name = "project_id", nullable = false)
 	private Project project;
 
+	public void changeVersion(PolicyVersion version) {
+		this.policyVersion = version;
+	}
+
 	@Builder
 	private ProjectPolicyMapping(PolicyVersion policyVersion, Project project) {
 		this.policyVersion = policyVersion;

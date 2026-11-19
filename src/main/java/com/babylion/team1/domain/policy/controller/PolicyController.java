@@ -2,6 +2,11 @@ package com.babylion.team1.domain.policy.controller;
 
 import com.babylion.team1.domain.policy.dto.request.PolicyListRequest;
 import com.babylion.team1.domain.policy.dto.request.PolicyVersionDraftRequest;
+import com.babylion.team1.domain.policy.dto.request.PolicyApplyRequest;
+import com.babylion.team1.domain.policy.dto.response.PolicyApplyPreviewResponse;
+import com.babylion.team1.domain.policy.dto.response.PolicyApplyResponse;
+import com.babylion.team1.domain.policy.service.PolicyApplyService;
+import java.util.List;
 import com.babylion.team1.domain.policy.dto.request.PolicyVersionHistoryRequest;
 import com.babylion.team1.domain.policy.dto.response.PolicyListResponse;
 import com.babylion.team1.domain.policy.dto.response.PolicyVersionDetailResponse;
@@ -40,6 +45,29 @@ import org.springframework.web.bind.annotation.RestController;
 public class PolicyController {
 	private final PolicyQueryService policyQueryService;
 	private final PolicyVersionCommandService policyVersionCommandService;
+	private final PolicyApplyService policyApplyService;
+
+	@Operation(summary = "정책 적용 확인 뷰", description = "ADMIN·APPROVER가 같은 회사 대상의 현재 매핑과 적용할 설정을 확인합니다. 중복 프로젝트 ID는 제거하며 데이터를 변경하지 않습니다.")
+	@SecurityRequirement(name = "bearerAuth")
+	@GetMapping("/{policyId}/versions/{versionId}/apply-preview")
+	public ResponseEntity<ApiResponse<PolicyApplyPreviewResponse>> applyPreview(
+			@Parameter(hidden = true) @AuthenticatedUserId Long userId,
+			@PathVariable @Positive Long policyId, @PathVariable @Positive Long versionId,
+			@RequestParam List<Long> projectIds) {
+		return ResponseEntity.ok(ApiResponse.success("S200", "정책 적용 확인 뷰에 성공했습니다",
+				policyApplyService.preview(userId, policyId, versionId, projectIds)));
+	}
+
+	@Operation(summary = "새 정책 버전 실적용", description = "APPROVER가 DRAFT를 요청한 프로젝트에 한 번 적용합니다. 정책별 적용 요청을 직렬화하고 매핑·버전·감사를 함께 저장합니다. 재적용 또는 중복 매핑은 409입니다.")
+	@SecurityRequirement(name = "bearerAuth")
+	@PostMapping("/{policyId}/versions/{versionId}/apply")
+	public ResponseEntity<ApiResponse<PolicyApplyResponse>> applyVersion(
+			@Parameter(hidden = true) @AuthenticatedUserId Long userId,
+			@PathVariable @Positive Long policyId, @PathVariable @Positive Long versionId,
+			@Valid @RequestBody PolicyApplyRequest request) {
+		return ResponseEntity.ok(ApiResponse.success("S200", "새 정책 버전 실적용에 성공했습니다",
+				policyApplyService.apply(userId, policyId, versionId, request.projectIds())));
+	}
 
 	@Operation(summary = "업무 유형별 정책 목록 조회",
 			description = "ADMIN·APPROVER가 같은 회사의 정책을 버전 단위로 조회합니다. "
