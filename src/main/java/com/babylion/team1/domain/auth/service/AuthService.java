@@ -1,13 +1,16 @@
 package com.babylion.team1.domain.auth.service;
 
 import com.babylion.team1.domain.auth.dto.request.EmailCheckRequest;
+import com.babylion.team1.domain.auth.dto.request.LoginRequest;
 import com.babylion.team1.domain.auth.dto.request.SignupRequest;
 import com.babylion.team1.domain.auth.dto.response.EmailCheckResponse;
+import com.babylion.team1.domain.auth.dto.response.LoginResponse;
 import com.babylion.team1.domain.auth.dto.response.SignupResponse;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
+import com.babylion.team1.global.jwt.JwtProvider;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -25,6 +28,7 @@ public class AuthService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final JwtProvider jwtProvider;
 
     @Transactional
     public SignupResponse signup(SignupRequest request) {
@@ -54,5 +58,20 @@ public class AuthService {
     public EmailCheckResponse checkEmail(EmailCheckRequest request) {
         boolean exists = userRepository.existsByEmail(request.email());
         return new EmailCheckResponse(!exists);
+    }
+
+    @Transactional
+    public LoginResponse login(LoginRequest request) {
+        // 없는 이메일과 틀린 비밀번호를 구분하지 않고 같은 에러로 응답한다.
+        User user = userRepository.findByEmail(request.email())
+                .filter(found -> passwordEncoder.matches(request.password(), found.getPasswordHash()))
+                .orElseThrow(() -> new CustomException(ErrorCode.INVALID_CREDENTIALS));
+
+        String accessToken = jwtProvider.createAccessToken(user.getId());
+        String refreshToken = jwtProvider.createRefreshToken(user.getId());
+        // 다시 로그인하면 기존 리프레시 토큰을 덮어쓴다(변경 감지로 커밋 시 반영).
+        user.updateRefreshToken(refreshToken);
+
+        return LoginResponse.of(accessToken, refreshToken, user);
     }
 }

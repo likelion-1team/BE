@@ -7,6 +7,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
+import com.babylion.team1.global.jwt.JwtProvider;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +27,7 @@ class AuthControllerTest {
 
     private static final String SIGNUP_URL = "/api/v1/auth/signup";
     private static final String EMAIL_CHECK_URL = "/api/v1/auth/email-check";
+    private static final String LOGIN_URL = "/api/v1/auth/login";
 
     @Autowired
     private MockMvc mockMvc;
@@ -33,6 +37,12 @@ class AuthControllerTest {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private JwtProvider jwtProvider;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @Test
     @DisplayName("회원가입에 성공하면 201과 userId를 응답하고 비밀번호는 BCrypt 해시로 저장된다")
@@ -145,6 +155,119 @@ class AuthControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.errors[0].field").value("email"));
+    }
+
+    @Test
+    @DisplayName("로그인에 성공하면 200과 토큰·사용자 정보를 응답하고 리프레시 토큰을 저장한다")
+    void loginSuccess() throws Exception {
+        User user = saveUser("홍길동", "login@test.com", "password123");
+
+        String content = mockMvc.perform(post(LOGIN_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody("login@test.com", "password123")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.message").value("로그인 성공"))
+                .andExpect(jsonPath("$.data.accessToken").isString())
+                .andExpect(jsonPath("$.data.refreshToken").isString())
+                .andExpect(jsonPath("$.data.user.userId").value(user.getId()))
+                .andExpect(jsonPath("$.data.user.name").value("홍길동"))
+                .andExpect(jsonPath("$.data.user.email").value("login@test.com"))
+                .andExpect(jsonPath("$.errors").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+
+        JsonNode data = objectMapper.readTree(content).get("data");
+        String accessToken = data.get("accessToken").asString();
+        String refreshToken = data.get("refreshToken").asString();
+
+        assertThat(jwtProvider.parseClaims(accessToken).getSubject()).isEqualTo(String.valueOf(user.getId()));
+        assertThat(jwtProvider.parseClaims(refreshToken).getSubject()).isEqualTo(String.valueOf(user.getId()));
+        assertThat(userRepository.findByEmail("login@test.com").orElseThrow().getRefreshToken())
+                .isEqualTo(refreshToken);
+    }
+
+    @Test
+    @DisplayName("다시 로그인하면 저장된 리프레시 토큰을 새 토큰으로 덮어쓴다")
+    void loginOverwritesRefreshToken() throws Exception {
+        saveUser("홍길동", "relogin@test.com", "password123");
+
+        String first = loginAndGetRefreshToken("relogin@test.com", "password123");
+        String second = loginAndGetRefreshToken("relogin@test.com", "password123");
+
+        assertThat(second).isNotEqualTo(first);
+        assertThat(userRepository.findByEmail("relogin@test.com").orElseThrow().getRefreshToken())
+                .isEqualTo(second);
+    }
+
+    @Test
+    @DisplayName("가입되지 않은 이메일이면 401 INVALID_CREDENTIALS로 응답한다")
+    void loginUnknownEmail() throws Exception {
+        mockMvc.perform(post(LOGIN_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody("nobody@test.com", "password123")))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"))
+                .andExpect(jsonPath("$.message").value("이메일 또는 비밀번호가 올바르지 않습니다."));
+    }
+
+    @Test
+    @DisplayName("비밀번호가 틀리면 없는 이메일과 같은 401 INVALID_CREDENTIALS로 응답하고 토큰을 저장하지 않는다")
+    void loginWrongPassword() throws Exception {
+        saveUser("홍길동", "wrong-pw@test.com", "password123");
+
+        mockMvc.perform(post(LOGIN_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody("wrong-pw@test.com", "wrongpass1")))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"))
+                .andExpect(jsonPath("$.message").value("이메일 또는 비밀번호가 올바르지 않습니다."));
+
+        assertThat(userRepository.findByEmail("wrong-pw@test.com").orElseThrow().getRefreshToken()).isNull();
+    }
+
+    @Test
+    @DisplayName("비밀번호가 비어 있으면 400 INVALID_REQUEST로 응답한다")
+    void loginMissingPassword() throws Exception {
+        mockMvc.perform(post(LOGIN_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody("login@test.com", "")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errors[0].field").value("password"));
+    }
+
+    @Test
+    @DisplayName("이메일 형식이 올바르지 않으면 400 INVALID_REQUEST로 응답한다")
+    void loginInvalidEmailFormat() throws Exception {
+        mockMvc.perform(post(LOGIN_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody("not-an-email", "password123")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errors[0].field").value("email"));
+    }
+
+    private User saveUser(String name, String email, String password) {
+        return userRepository.save(User.builder()
+                .name(name)
+                .email(email)
+                .passwordHash(passwordEncoder.encode(password))
+                .build());
+    }
+
+    private String loginAndGetRefreshToken(String email, String password) throws Exception {
+        String content = mockMvc.perform(post(LOGIN_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody(email, password)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(content).get("data").get("refreshToken").asString();
+    }
+
+    private String loginBody(String email, String password) {
+        return """
+                {"email": "%s", "password": "%s"}
+                """.formatted(email, password);
     }
 
     private String emailBody(String email) {
