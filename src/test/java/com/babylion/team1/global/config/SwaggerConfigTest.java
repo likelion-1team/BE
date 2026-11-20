@@ -27,6 +27,7 @@ class SwaggerConfigTest {
                 .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.scheme").value("bearer"))
                 .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.bearerFormat").value("JWT"))
                 .andExpect(jsonPath("$.security[0].bearerAuth").isArray())
-                .andExpect(jsonPath("$.paths['/api/v1/auth/login'].post.security").isEmpty());
+                .andExpect(jsonPath("$.paths['/api/v1/auth/login'].post.security").isEmpty())
+                .andExpect(jsonPath("$.paths['/api/v1/auth/logout'].post.security[0].bearerAuth").isArray());
     }
 }
