@@ -31,6 +31,9 @@ public enum ErrorCode {
     INVALID_TOKEN(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "유효하지 않은 토큰입니다."),
     EXPIRED_TOKEN(HttpStatus.UNAUTHORIZED, "EXPIRED_TOKEN", "만료된 토큰입니다."),
 
+    // User
+    USER_NOT_FOUND(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."),
+
     // Feedback
     FEEDBACK_NOT_SHARED(HttpStatus.BAD_REQUEST, "FEEDBACK_NOT_SHARED", "공유가 허용된 사례만 가이드로 지정할 수 있습니다.");
 
