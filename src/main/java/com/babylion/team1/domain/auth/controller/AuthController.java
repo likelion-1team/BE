@@ -3,9 +3,11 @@ package com.babylion.team1.domain.auth.controller;
 import com.babylion.team1.domain.auth.dto.request.EmailCheckRequest;
 import com.babylion.team1.domain.auth.dto.request.LoginRequest;
 import com.babylion.team1.domain.auth.dto.request.SignupRequest;
+import com.babylion.team1.domain.auth.dto.request.TokenRefreshRequest;
 import com.babylion.team1.domain.auth.dto.response.EmailCheckResponse;
 import com.babylion.team1.domain.auth.dto.response.LoginResponse;
 import com.babylion.team1.domain.auth.dto.response.SignupResponse;
+import com.babylion.team1.domain.auth.dto.response.TokenRefreshResponse;
 import com.babylion.team1.domain.auth.service.AuthService;
 import com.babylion.team1.global.response.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -45,5 +47,11 @@ public class AuthController {
     public ResponseEntity<ApiResponse<LoginResponse>> login(@Valid @RequestBody LoginRequest request) {
         LoginResponse response = authService.login(request);
         return ResponseEntity.ok(ApiResponse.success("S200", "로그인 성공", response));
+    }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<ApiResponse<TokenRefreshResponse>> refresh(@Valid @RequestBody TokenRefreshRequest request) {
+        TokenRefreshResponse response = authService.refresh(request);
+        return ResponseEntity.ok(ApiResponse.success("S200", "토큰 재발급 성공", response));
     }
 }

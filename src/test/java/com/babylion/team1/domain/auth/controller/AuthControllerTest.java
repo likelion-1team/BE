@@ -13,6 +13,7 @@ import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
@@ -28,6 +29,7 @@ class AuthControllerTest {
     private static final String SIGNUP_URL = "/api/v1/auth/signup";
     private static final String EMAIL_CHECK_URL = "/api/v1/auth/email-check";
     private static final String LOGIN_URL = "/api/v1/auth/login";
+    private static final String REFRESH_URL = "/api/v1/auth/refresh";
 
     @Autowired
     private MockMvc mockMvc;
@@ -43,6 +45,9 @@ class AuthControllerTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Value("${jwt.secret}")
+    private String jwtSecret;
 
     @Test
     @DisplayName("회원가입에 성공하면 201과 userId를 응답하고 비밀번호는 BCrypt 해시로 저장된다")
@@ -245,6 +250,135 @@ class AuthControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.errors[0].field").value("email"));
+    }
+
+    @Test
+    @DisplayName("저장된 리프레시 토큰으로 재발급하면 200과 새 토큰을 응답하고 저장된 리프레시 토큰을 교체한다")
+    void refreshSuccess() throws Exception {
+        User user = saveUser("홍길동", "refresh@test.com", "password123");
+        String oldRefreshToken = storeRefreshToken(user, jwtProvider.createRefreshToken(user.getId()));
+
+        String content = mockMvc.perform(post(REFRESH_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(refreshBody(oldRefreshToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.message").value("토큰 재발급 성공"))
+                .andExpect(jsonPath("$.data.accessToken").isString())
+                .andExpect(jsonPath("$.data.refreshToken").isString())
+                .andExpect(jsonPath("$.errors").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+
+        JsonNode data = objectMapper.readTree(content).get("data");
+        String newAccessToken = data.get("accessToken").asString();
+        String newRefreshToken = data.get("refreshToken").asString();
+
+        assertThat(newRefreshToken).isNotEqualTo(oldRefreshToken);
+        assertThat(jwtProvider.parseClaims(newAccessToken).getSubject()).isEqualTo(String.valueOf(user.getId()));
+        assertThat(jwtProvider.isAccessToken(jwtProvider.parseClaims(newAccessToken))).isTrue();
+        assertThat(jwtProvider.getUserIdFromRefreshToken(newRefreshToken)).isEqualTo(user.getId());
+        assertThat(userRepository.findByEmail("refresh@test.com").orElseThrow().getRefreshToken())
+                .isEqualTo(newRefreshToken);
+    }
+
+    @Test
+    @DisplayName("재발급 후 이전 리프레시 토큰으로 다시 요청하면 401 INVALID_TOKEN으로 응답한다")
+    void refreshWithRotatedToken() throws Exception {
+        User user = saveUser("홍길동", "rotated@test.com", "password123");
+        String oldRefreshToken = storeRefreshToken(user, jwtProvider.createRefreshToken(user.getId()));
+
+        mockMvc.perform(post(REFRESH_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(refreshBody(oldRefreshToken)))
+                .andExpect(status().isOk());
+
+        expectRefreshFailure(oldRefreshToken, "INVALID_TOKEN");
+    }
+
+    @Test
+    @DisplayName("만료된 리프레시 토큰이면 401 EXPIRED_TOKEN으로 응답한다")
+    void refreshWithExpiredToken() throws Exception {
+        User user = saveUser("홍길동", "expired@test.com", "password123");
+        JwtProvider expiredProvider = new JwtProvider(jwtSecret, -1000L, -1000L);
+        String expiredToken = storeRefreshToken(user, expiredProvider.createRefreshToken(user.getId()));
+
+        expectRefreshFailure(expiredToken, "EXPIRED_TOKEN");
+    }
+
+    @Test
+    @DisplayName("저장된 값과 다른 리프레시 토큰이면 401 INVALID_TOKEN으로 응답하고 저장된 토큰은 그대로 둔다")
+    void refreshWithMismatchedToken() throws Exception {
+        User user = saveUser("홍길동", "mismatch@test.com", "password123");
+        String storedToken = storeRefreshToken(user, jwtProvider.createRefreshToken(user.getId()));
+        String otherToken = jwtProvider.createRefreshToken(user.getId());
+
+        expectRefreshFailure(otherToken, "INVALID_TOKEN");
+
+        assertThat(userRepository.findByEmail("mismatch@test.com").orElseThrow().getRefreshToken())
+                .isEqualTo(storedToken);
+    }
+
+    @Test
+    @DisplayName("저장된 리프레시 토큰이 없으면(로그아웃 상태) 401 INVALID_TOKEN으로 응답한다")
+    void refreshWithoutStoredToken() throws Exception {
+        User user = saveUser("홍길동", "logged-out@test.com", "password123");
+
+        expectRefreshFailure(jwtProvider.createRefreshToken(user.getId()), "INVALID_TOKEN");
+    }
+
+    @Test
+    @DisplayName("형식이 잘못된 토큰이면 401 INVALID_TOKEN으로 응답한다")
+    void refreshWithMalformedToken() throws Exception {
+        expectRefreshFailure("not-a-jwt", "INVALID_TOKEN");
+    }
+
+    @Test
+    @DisplayName("다른 키로 서명된 토큰이면 401 INVALID_TOKEN으로 응답한다")
+    void refreshWithForgedToken() throws Exception {
+        User user = saveUser("홍길동", "forged@test.com", "password123");
+        JwtProvider otherProvider = new JwtProvider("another-secret-key-for-test-only-0123456789", 60000L, 60000L);
+
+        expectRefreshFailure(otherProvider.createRefreshToken(user.getId()), "INVALID_TOKEN");
+    }
+
+    @Test
+    @DisplayName("액세스 토큰으로 재발급을 요청하면 401 INVALID_TOKEN으로 응답한다")
+    void refreshWithAccessToken() throws Exception {
+        User user = saveUser("홍길동", "access-as-refresh@test.com", "password123");
+        storeRefreshToken(user, jwtProvider.createRefreshToken(user.getId()));
+
+        expectRefreshFailure(jwtProvider.createAccessToken(user.getId()), "INVALID_TOKEN");
+    }
+
+    @Test
+    @DisplayName("리프레시 토큰이 비어 있으면 400 INVALID_REQUEST로 응답한다")
+    void refreshWithBlankToken() throws Exception {
+        mockMvc.perform(post(REFRESH_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(refreshBody("")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errors[0].field").value("refreshToken"));
+    }
+
+    private String storeRefreshToken(User user, String refreshToken) {
+        user.updateRefreshToken(refreshToken);
+        userRepository.saveAndFlush(user);
+        return refreshToken;
+    }
+
+    private void expectRefreshFailure(String refreshToken, String errorCode) throws Exception {
+        mockMvc.perform(post(REFRESH_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(refreshBody(refreshToken)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(errorCode));
+    }
+
+    private String refreshBody(String refreshToken) {
+        return """
+                {"refreshToken": "%s"}
+                """.formatted(refreshToken);
     }
 
     private User saveUser(String name, String email, String password) {

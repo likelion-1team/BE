@@ -34,7 +34,7 @@ public class SecurityConfig {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/signup", "/api/v1/auth/email-check", "/api/v1/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/signup", "/api/v1/auth/email-check", "/api/v1/auth/login", "/api/v1/auth/refresh").permitAll()
                         .requestMatchers(SWAGGER_URLS).permitAll()
                         // 컨트롤러 예외 처리 결과가 /error로 포워딩될 때 401로 덮이지 않도록 허용
                         .requestMatchers("/error").permitAll()
