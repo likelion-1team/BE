@@ -93,4 +93,14 @@ public class AuthService {
 
         return new TokenRefreshResponse(newAccessToken, newRefreshToken);
     }
+
+    /**
+     * 저장된 리프레시 토큰을 삭제(NULL)해 이후 재발급을 막는다.
+     * 이미 로그아웃했거나 사용자가 없어도 결과는 같으므로 에러 없이 끝낸다.
+     * 이미 발급된 액세스 토큰은 만료 시간까지 유효하다.
+     */
+    @Transactional
+    public void logout(Long userId) {
+        userRepository.findById(userId).ifPresent(User::clearRefreshToken);
+    }
 }

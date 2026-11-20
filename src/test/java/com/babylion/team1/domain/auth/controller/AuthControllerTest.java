@@ -2,6 +2,7 @@ package com.babylion.team1.domain.auth.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -16,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
@@ -30,6 +32,7 @@ class AuthControllerTest {
     private static final String EMAIL_CHECK_URL = "/api/v1/auth/email-check";
     private static final String LOGIN_URL = "/api/v1/auth/login";
     private static final String REFRESH_URL = "/api/v1/auth/refresh";
+    private static final String LOGOUT_URL = "/api/v1/auth/logout";
 
     @Autowired
     private MockMvc mockMvc;
@@ -359,6 +362,89 @@ class AuthControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.errors[0].field").value("refreshToken"));
+    }
+
+    @Test
+    @DisplayName("로그아웃하면 204 No Content를 응답하고 저장된 리프레시 토큰을 삭제한다")
+    void logoutSuccess() throws Exception {
+        User user = saveUser("홍길동", "logout@test.com", "password123");
+        storeRefreshToken(user, jwtProvider.createRefreshToken(user.getId()));
+
+        mockMvc.perform(post(LOGOUT_URL)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(jwtProvider.createAccessToken(user.getId()))))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        assertThat(userRepository.findByEmail("logout@test.com").orElseThrow().getRefreshToken()).isNull();
+    }
+
+    @Test
+    @DisplayName("로그아웃 후 이전 리프레시 토큰으로 재발급하면 401 INVALID_TOKEN으로 응답한다")
+    void refreshAfterLogout() throws Exception {
+        User user = saveUser("홍길동", "logout-refresh@test.com", "password123");
+        String refreshToken = storeRefreshToken(user, jwtProvider.createRefreshToken(user.getId()));
+
+        mockMvc.perform(post(LOGOUT_URL)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(jwtProvider.createAccessToken(user.getId()))))
+                .andExpect(status().isNoContent());
+
+        expectRefreshFailure(refreshToken, "INVALID_TOKEN");
+    }
+
+    @Test
+    @DisplayName("이미 로그아웃한 상태에서 다시 로그아웃해도 204 No Content로 응답한다")
+    void logoutTwice() throws Exception {
+        User user = saveUser("홍길동", "logout-twice@test.com", "password123");
+        String accessToken = jwtProvider.createAccessToken(user.getId());
+
+        mockMvc.perform(post(LOGOUT_URL).header(HttpHeaders.AUTHORIZATION, bearer(accessToken)))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(post(LOGOUT_URL).header(HttpHeaders.AUTHORIZATION, bearer(accessToken)))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @DisplayName("토큰 없이 로그아웃하면 401 UNAUTHORIZED로 응답하고 저장된 토큰은 그대로 둔다")
+    void logoutWithoutToken() throws Exception {
+        User user = saveUser("홍길동", "logout-no-token@test.com", "password123");
+        String refreshToken = storeRefreshToken(user, jwtProvider.createRefreshToken(user.getId()));
+
+        mockMvc.perform(post(LOGOUT_URL))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        assertThat(userRepository.findByEmail("logout-no-token@test.com").orElseThrow().getRefreshToken())
+                .isEqualTo(refreshToken);
+    }
+
+    @Test
+    @DisplayName("만료된 액세스 토큰으로 로그아웃하면 401 EXPIRED_TOKEN으로 응답한다")
+    void logoutWithExpiredToken() throws Exception {
+        User user = saveUser("홍길동", "logout-expired@test.com", "password123");
+        JwtProvider expiredProvider = new JwtProvider(jwtSecret, -1000L, -1000L);
+
+        mockMvc.perform(post(LOGOUT_URL)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(expiredProvider.createAccessToken(user.getId()))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("EXPIRED_TOKEN"));
+    }
+
+    @Test
+    @DisplayName("유효하지 않은 토큰이나 리프레시 토큰으로 로그아웃하면 401 INVALID_TOKEN으로 응답한다")
+    void logoutWithInvalidToken() throws Exception {
+        User user = saveUser("홍길동", "logout-invalid@test.com", "password123");
+
+        mockMvc.perform(post(LOGOUT_URL).header(HttpHeaders.AUTHORIZATION, bearer("not-a-jwt")))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
+        mockMvc.perform(post(LOGOUT_URL)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(jwtProvider.createRefreshToken(user.getId()))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
+    }
+
+    private String bearer(String token) {
+        return "Bearer " + token;
     }
 
     private String storeRefreshToken(User user, String refreshToken) {
