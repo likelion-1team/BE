@@ -1,6 +1,10 @@
 package com.babylion.team1.global.jwt;
 
+import com.babylion.team1.global.exception.CustomException;
+import com.babylion.team1.global.exception.ErrorCode;
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import java.nio.charset.StandardCharsets;
@@ -58,6 +62,25 @@ public class JwtProvider {
 
     public boolean isRefreshToken(Claims claims) {
         return REFRESH_TYPE.equals(claims.get(TOKEN_TYPE_CLAIM, String.class));
+    }
+
+    /**
+     * 리프레시 토큰을 검증하고 userId를 반환한다.
+     * 만료되었으면 EXPIRED_TOKEN, 서명·형식 오류이거나 리프레시 토큰이 아니면 INVALID_TOKEN 예외를 던진다.
+     */
+    public Long getUserIdFromRefreshToken(String refreshToken) {
+        try {
+            Claims claims = parseClaims(refreshToken);
+            if (!isRefreshToken(claims)) {
+                throw new CustomException(ErrorCode.INVALID_TOKEN);
+            }
+            return Long.valueOf(claims.getSubject());
+        } catch (ExpiredJwtException e) {
+            throw new CustomException(ErrorCode.EXPIRED_TOKEN);
+        } catch (JwtException | IllegalArgumentException e) {
+            // 서명 불일치, 형식 오류, subject가 숫자가 아닌 경우 등
+            throw new CustomException(ErrorCode.INVALID_TOKEN);
+        }
     }
 
     private String createToken(Long userId, String type, long expirationMillis) {
