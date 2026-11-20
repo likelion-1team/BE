@@ -3,9 +3,11 @@ package com.babylion.team1.domain.auth.service;
 import com.babylion.team1.domain.auth.dto.request.EmailCheckRequest;
 import com.babylion.team1.domain.auth.dto.request.LoginRequest;
 import com.babylion.team1.domain.auth.dto.request.SignupRequest;
+import com.babylion.team1.domain.auth.dto.request.TokenRefreshRequest;
 import com.babylion.team1.domain.auth.dto.response.EmailCheckResponse;
 import com.babylion.team1.domain.auth.dto.response.LoginResponse;
 import com.babylion.team1.domain.auth.dto.response.SignupResponse;
+import com.babylion.team1.domain.auth.dto.response.TokenRefreshResponse;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
 import com.babylion.team1.global.exception.CustomException;
@@ -73,5 +75,22 @@ public class AuthService {
         user.updateRefreshToken(refreshToken);
 
         return LoginResponse.of(accessToken, refreshToken, user);
+    }
+
+    @Transactional
+    public TokenRefreshResponse refresh(TokenRefreshRequest request) {
+        Long userId = jwtProvider.getUserIdFromRefreshToken(request.refreshToken());
+
+        // 같은 토큰으로 동시에 요청해도 하나만 성공하도록 행을 잠근 뒤 비교·교체한다.
+        // 사용자가 없거나(탈퇴), 로그아웃으로 NULL이거나, 이미 교체된 이전 토큰이면 모두 INVALID_TOKEN이다.
+        User user = userRepository.findByIdForUpdate(userId)
+                .filter(found -> request.refreshToken().equals(found.getRefreshToken()))
+                .orElseThrow(() -> new CustomException(ErrorCode.INVALID_TOKEN));
+
+        String newAccessToken = jwtProvider.createAccessToken(user.getId());
+        String newRefreshToken = jwtProvider.createRefreshToken(user.getId());
+        user.updateRefreshToken(newRefreshToken);
+
+        return new TokenRefreshResponse(newAccessToken, newRefreshToken);
     }
 }
