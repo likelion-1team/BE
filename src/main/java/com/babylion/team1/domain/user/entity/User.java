@@ -1,14 +1,14 @@
 package com.babylion.team1.domain.user.entity;
 
-import com.babylion.team1.domain.company.entity.Company;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.CreationTimestamp;
 
-/** 사용자 */
+/** 사용자(로그인) */
 @Entity
 @Table(name = "users")
 @Getter
@@ -17,40 +17,38 @@ public class User {
 
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	@Column(name = "user_id")
 	private Long id;
 
-	@ManyToOne(fetch = FetchType.LAZY)
-	@JoinColumn(name = "company_id", nullable = false)
-	private Company company;
+	@Column(name = "email", nullable = false, unique = true, length = 255)
+	private String email;
 
-	@Column(name = "employee_number", nullable = false, length = 50)
-	private String employeeNumber;
-
+	/** BCrypt 해시 */
 	@Column(name = "password_hash", nullable = false, length = 255)
 	private String passwordHash;
 
-	@Column(name = "user_name", nullable = false, length = 50)
-	private String userName;
+	/** 현재 리프레시 토큰. 로그아웃하면 NULL */
+	@Column(name = "refresh_token", length = 500)
+	private String refreshToken;
 
-	@Enumerated(EnumType.STRING)
-	@Column(name = "role_type", nullable = false, length = 20)
-	private RoleType roleType;
+	@Column(name = "name", nullable = false, length = 50)
+	private String name;
 
-	@Column(name = "failed_login_count", nullable = false)
-	private Integer failedLoginCount;
-
-	@Column(name = "last_login_at")
-	private LocalDateTime lastLoginAt;
+	@CreationTimestamp
+	@Column(name = "created_at", nullable = false, updatable = false)
+	private LocalDateTime createdAt;
 
 	@Builder
-	private User(Company company, String employeeNumber, String passwordHash, String userName, RoleType roleType, Integer failedLoginCount, LocalDateTime lastLoginAt) {
-		this.company = company;
-		this.employeeNumber = employeeNumber;
+	private User(String email, String passwordHash, String name) {
+		this.email = email;
 		this.passwordHash = passwordHash;
-		this.userName = userName;
-		this.roleType = roleType;
-		this.failedLoginCount = failedLoginCount;
-		this.lastLoginAt = lastLoginAt;
+		this.name = name;
+	}
+
+	public void updateRefreshToken(String refreshToken) {
+		this.refreshToken = refreshToken;
+	}
+
+	public void clearRefreshToken() {
+		this.refreshToken = null;
 	}
 }
