@@ -12,6 +12,7 @@ import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
@@ -27,8 +28,10 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 예외를 일부러 던지는 테스트 전용 컨트롤러로 GlobalExceptionHandler의 응답을 검증한다.
  * 웹 계층만 띄우므로 DB 없이 실행된다.
+ * 예외 처리만 검증하므로 Spring Security 필터는 끈다.
  */
 @WebMvcTest(controllers = GlobalExceptionHandlerTest.TestController.class)
+@AutoConfigureMockMvc(addFilters = false)
 @Import({GlobalExceptionHandlerTest.TestController.class, GlobalExceptionHandler.class})
 class GlobalExceptionHandlerTest {
 
