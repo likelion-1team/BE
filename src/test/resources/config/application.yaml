@@ -1,0 +1,4 @@
+# 테스트 전용 설정. main의 application.yaml에 덧씌워진다.
+jwt:
+  # 테스트 전용 키. 실제 환경에서 사용하지 않는다.
+  secret: test-only-jwt-secret-key-not-for-real-use-0123456789
