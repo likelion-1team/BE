@@ -1,0 +1,110 @@
+package com.babylion.team1.domain.upload.entity;
+
+import com.babylion.team1.domain.team.entity.Team;
+import com.babylion.team1.domain.user.entity.User;
+import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+import java.time.LocalDateTime;
+import lombok.AccessLevel;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import org.hibernate.annotations.ColumnDefault;
+import org.hibernate.annotations.CreationTimestamp;
+
+/** 올린 파일 + 분석 상태 */
+@Entity
+@Table(name = "uploads")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+public class Upload {
+
+	@Id
+	@GeneratedValue(strategy = GenerationType.IDENTITY)
+	private Long id;
+
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "team_id", nullable = false)
+	private Team team;
+
+	/** 업로더 = 대화 주인 */
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "uploader_id", nullable = false)
+	private User uploader;
+
+	@Column(name = "file_name", nullable = false, length = 255)
+	private String fileName;
+
+	/** 대상 기간 안 대화 수 */
+	@Column(name = "conversation_count", nullable = false)
+	private Integer conversationCount;
+
+	/** 직원이 고른 대화 수 */
+	@ColumnDefault("0")
+	@Column(name = "selected_count", nullable = false)
+	private Integer selectedCount = 0;
+
+	@ColumnDefault("0")
+	@Column(name = "duplicate_count", nullable = false)
+	private Integer duplicateCount = 0;
+
+	@Enumerated(EnumType.STRING)
+	@JdbcTypeCode(SqlTypes.VARCHAR)
+	@Column(name = "status", nullable = false, length = 20)
+	private UploadStatus status = UploadStatus.UPLOADED;
+
+	/** 0~100 */
+	@ColumnDefault("0")
+	@Column(name = "progress", nullable = false)
+	private Integer progress = 0;
+
+	/** FAILED일 때만 */
+	@Column(name = "fail_reason", length = 500)
+	private String failReason;
+
+	@CreationTimestamp
+	@Column(name = "uploaded_at", nullable = false, updatable = false)
+	private LocalDateTime uploadedAt;
+
+	/** DONE 전 NULL */
+	@Column(name = "analyzed_at")
+	private LocalDateTime analyzedAt;
+
+	@Builder
+	private Upload(Team team, User uploader, String fileName, Integer conversationCount, Integer duplicateCount) {
+		this.team = team;
+		this.uploader = uploader;
+		this.fileName = fileName;
+		this.conversationCount = conversationCount;
+		if (duplicateCount != null) {
+			this.duplicateCount = duplicateCount;
+		}
+	}
+
+	public boolean isUploadedBy(Long userId) {
+		return uploader.getId().equals(userId);
+	}
+
+	public void startAnalysis(int selectedCount) {
+		this.selectedCount = selectedCount;
+		this.status = UploadStatus.ANALYZING;
+		this.progress = 0;
+		this.failReason = null;
+	}
+
+	public void updateProgress(int progress) {
+		this.progress = Math.max(0, Math.min(100, progress));
+	}
+
+	public void complete() {
+		this.status = UploadStatus.DONE;
+		this.progress = 100;
+		this.analyzedAt = LocalDateTime.now();
+	}
+
+	public void fail(String failReason) {
+		this.status = UploadStatus.FAILED;
+		this.failReason = failReason;
+	}
+}
