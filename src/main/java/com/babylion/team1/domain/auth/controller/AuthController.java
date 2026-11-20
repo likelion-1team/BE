@@ -1,6 +1,8 @@
 package com.babylion.team1.domain.auth.controller;
 
+import com.babylion.team1.domain.auth.dto.request.EmailCheckRequest;
 import com.babylion.team1.domain.auth.dto.request.SignupRequest;
+import com.babylion.team1.domain.auth.dto.response.EmailCheckResponse;
 import com.babylion.team1.domain.auth.dto.response.SignupResponse;
 import com.babylion.team1.domain.auth.service.AuthService;
 import com.babylion.team1.global.response.ApiResponse;
@@ -26,5 +28,11 @@ public class AuthController {
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(ApiResponse.success("S201", "회원가입 성공", response));
+    }
+
+    @PostMapping("/email-check")
+    public ResponseEntity<ApiResponse<EmailCheckResponse>> checkEmail(@Valid @RequestBody EmailCheckRequest request) {
+        EmailCheckResponse response = authService.checkEmail(request);
+        return ResponseEntity.ok(ApiResponse.success("S200", "이메일 중복 확인 성공", response));
     }
 }
