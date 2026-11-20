@@ -1,6 +1,8 @@
 package com.babylion.team1.domain.auth.service;
 
+import com.babylion.team1.domain.auth.dto.request.EmailCheckRequest;
 import com.babylion.team1.domain.auth.dto.request.SignupRequest;
+import com.babylion.team1.domain.auth.dto.response.EmailCheckResponse;
 import com.babylion.team1.domain.auth.dto.response.SignupResponse;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
@@ -47,5 +49,10 @@ public class AuthService {
         }
 
         return new SignupResponse(user.getId());
+    }
+
+    public EmailCheckResponse checkEmail(EmailCheckRequest request) {
+        boolean exists = userRepository.existsByEmail(request.email());
+        return new EmailCheckResponse(!exists);
     }
 }
