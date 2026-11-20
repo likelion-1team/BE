@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 class AuthControllerTest {
 
     private static final String SIGNUP_URL = "/api/v1/auth/signup";
+    private static final String EMAIL_CHECK_URL = "/api/v1/auth/email-check";
 
     @Autowired
     private MockMvc mockMvc;
@@ -104,6 +105,52 @@ class AuthControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.errors[0].field").value("name"));
+    }
+
+    @Test
+    @DisplayName("가입되지 않은 이메일이면 200과 available true를 응답한다")
+    void emailCheckAvailable() throws Exception {
+        mockMvc.perform(post(EMAIL_CHECK_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(emailBody("new-user@test.com")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.message").value("이메일 중복 확인 성공"))
+                .andExpect(jsonPath("$.data.available").value(true));
+    }
+
+    @Test
+    @DisplayName("이미 가입된 이메일이면 200과 available false를 응답한다")
+    void emailCheckAlreadyExists() throws Exception {
+        userRepository.save(User.builder()
+                .name("기존회원")
+                .email("taken@test.com")
+                .passwordHash(passwordEncoder.encode("password123"))
+                .build());
+
+        mockMvc.perform(post(EMAIL_CHECK_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(emailBody("taken@test.com")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.data.available").value(false));
+    }
+
+    @Test
+    @DisplayName("이메일이 비어 있으면 400 INVALID_REQUEST로 응답한다")
+    void emailCheckMissingEmail() throws Exception {
+        mockMvc.perform(post(EMAIL_CHECK_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(emailBody("")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errors[0].field").value("email"));
+    }
+
+    private String emailBody(String email) {
+        return """
+                {"email": "%s"}
+                """.formatted(email);
     }
 
     private void expectInvalidPassword(String password) throws Exception {
