@@ -2,6 +2,8 @@ package com.babylion.team1.domain.dashboard.controller;
 
 import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
 import com.babylion.team1.domain.dashboard.dto.request.OnboardingEffectRequest;
+import com.babylion.team1.domain.dashboard.dto.request.TrendRequest;
+import com.babylion.team1.domain.dashboard.dto.response.TrendResponse;
 import com.babylion.team1.domain.dashboard.dto.response.KpiResponse;
 import com.babylion.team1.domain.dashboard.dto.response.OnboardingEffectResponse;
 import com.babylion.team1.domain.dashboard.service.DashboardService;
@@ -33,6 +35,15 @@ public class DashboardController {
             @AuthenticationPrincipal Long userId,
             @ParameterObject @ModelAttribute KpiRequest request) {
         KpiResponse response = dashboardService.getKpis(teamId, userId, request);
+        return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
+    }
+
+    @GetMapping("/trends")
+    public ResponseEntity<ApiResponse<TrendResponse>> getTrends(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId,
+            @ParameterObject @ModelAttribute TrendRequest request) {
+        TrendResponse response = dashboardService.getTrends(teamId, userId, request);
         return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
     }
 
