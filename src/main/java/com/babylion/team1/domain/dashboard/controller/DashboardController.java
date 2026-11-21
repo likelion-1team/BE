@@ -1,7 +1,9 @@
 package com.babylion.team1.domain.dashboard.controller;
 
 import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
+import com.babylion.team1.domain.dashboard.dto.request.OnboardingEffectRequest;
 import com.babylion.team1.domain.dashboard.dto.response.KpiResponse;
+import com.babylion.team1.domain.dashboard.dto.response.OnboardingEffectResponse;
 import com.babylion.team1.domain.dashboard.service.DashboardService;
 import com.babylion.team1.global.response.ApiResponse;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +33,15 @@ public class DashboardController {
             @AuthenticationPrincipal Long userId,
             @ParameterObject @ModelAttribute KpiRequest request) {
         KpiResponse response = dashboardService.getKpis(teamId, userId, request);
+        return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
+    }
+
+    @GetMapping("/onboarding-effect")
+    public ResponseEntity<ApiResponse<OnboardingEffectResponse>> getOnboardingEffect(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId,
+            @ParameterObject @ModelAttribute OnboardingEffectRequest request) {
+        OnboardingEffectResponse response = dashboardService.getOnboardingEffect(teamId, userId, request);
         return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
     }
 }

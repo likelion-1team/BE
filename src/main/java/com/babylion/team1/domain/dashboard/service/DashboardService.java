@@ -4,9 +4,12 @@ import com.babylion.team1.domain.dashboard.dto.ConversationAggregate;
 import com.babylion.team1.domain.dashboard.dto.DatePeriod;
 import com.babylion.team1.domain.dashboard.dto.KpiCondition;
 import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
+import com.babylion.team1.domain.dashboard.dto.request.OnboardingEffectRequest;
+import com.babylion.team1.domain.dashboard.dto.response.CoreMetrics;
 import com.babylion.team1.domain.dashboard.dto.response.CoverageResponse;
 import com.babylion.team1.domain.dashboard.dto.response.KpiResponse;
 import com.babylion.team1.domain.dashboard.dto.response.MetricValue;
+import com.babylion.team1.domain.dashboard.dto.response.OnboardingEffectResponse;
 import com.babylion.team1.domain.dashboard.repository.DashboardQueryRepository;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
@@ -17,6 +20,7 @@ import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -74,6 +78,38 @@ public class DashboardService {
                 MetricValue.of(current.humanTimeSec(), previous.humanTimeSec(), false),
                 MetricValue.of(current.conversationCount(), previous.conversationCount(), false),
                 coverage);
+    }
+
+    /**
+     * 온보딩 시작일 전/후의 핵심 지표 3개를 비교한다. 팀원이면 본인 값, 팀장이면 팀 집계.
+     * 전: 대상 기간 시작일 ~ 온보딩 시작일 전날 / 후: 온보딩 시작일 ~ 대상 기간 종료일.
+     * 온보딩 시작일이나 대상 기간이 없으면 before·after를 null로 돌려준다(화면에서 비교 카드 숨김).
+     */
+    public OnboardingEffectResponse getOnboardingEffect(Long teamId, Long userId, OnboardingEffectRequest request) {
+        TeamMember member = getMember(teamId, userId);
+        Optional<TeamSettings> settings = teamSettingsRepository.findByTeamId(teamId);
+        LocalDate onboardingStartDate = settings.map(TeamSettings::getOnboardingStartDate).orElse(null);
+        if (onboardingStartDate == null || !settings.get().isTargetSet()) {
+            return OnboardingEffectResponse.notComparable(onboardingStartDate);
+        }
+
+        TeamSettings teamSettings = settings.get();
+        KpiCondition condition = new KpiCondition(
+                teamId,
+                member.isLeader() ? null : userId,
+                request.taskTypes(),
+                List.of());
+        CoreMetrics before = aggregateCoreMetrics(condition, teamSettings.getTargetFrom(), onboardingStartDate.minusDays(1));
+        CoreMetrics after = aggregateCoreMetrics(condition, onboardingStartDate, teamSettings.getTargetTo());
+        return OnboardingEffectResponse.of(onboardingStartDate, before, after);
+    }
+
+    /** 온보딩 시작일이 대상 기간 밖이라 한쪽 기간이 비면(from > to) 대화 0건으로 본다 */
+    private CoreMetrics aggregateCoreMetrics(KpiCondition condition, LocalDate from, LocalDate to) {
+        if (from.isAfter(to)) {
+            return CoreMetrics.from(ConversationAggregate.empty());
+        }
+        return CoreMetrics.from(dashboardQueryRepository.aggregateConversations(condition, new DatePeriod(from, to)));
     }
 
     /** 팀이 없으면 404 TEAM_NOT_FOUND, 팀 멤버가 아니면 403 NOT_A_MEMBER */
