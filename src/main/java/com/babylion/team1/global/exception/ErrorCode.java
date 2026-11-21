@@ -34,6 +34,11 @@ public enum ErrorCode {
     // User
     USER_NOT_FOUND(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."),
 
+    // Team
+    TARGET_NOT_SET(HttpStatus.BAD_REQUEST, "TARGET_NOT_SET", "팀장이 분석 대상 업무와 기간을 먼저 설정해야 합니다."),
+    NOT_A_MEMBER(HttpStatus.FORBIDDEN, "NOT_A_MEMBER", "팀 멤버만 접근할 수 있습니다."),
+    TEAM_NOT_FOUND(HttpStatus.NOT_FOUND, "TEAM_NOT_FOUND", "팀을 찾을 수 없습니다."),
+
     // Feedback
     FEEDBACK_NOT_SHARED(HttpStatus.BAD_REQUEST, "FEEDBACK_NOT_SHARED", "공유가 허용된 사례만 가이드로 지정할 수 있습니다.");
 
