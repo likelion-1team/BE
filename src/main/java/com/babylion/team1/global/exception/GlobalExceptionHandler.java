@@ -18,6 +18,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
@@ -104,6 +106,17 @@ public class GlobalExceptionHandler {
                 new FieldErrorResponse(e.getParameterName(), "필수 파라미터입니다."));
         log.warn("[MissingParameter] {}", e.getParameterName());
         return toResponse(ErrorCode.MISSING_PARAMETER, errors);
+    }
+
+    /** 서블릿에서 요청 크기를 제한하면 컨트롤러에 진입하기 전에 발생한다. */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException e) {
+        return toResponse(ErrorCode.FILE_TOO_LARGE, null);
+    }
+
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMultipartException(MultipartException e) {
+        return toResponse(ErrorCode.INVALID_FILE_FORMAT, null);
     }
 
     /** 지원하지 않는 HTTP 메서드 */

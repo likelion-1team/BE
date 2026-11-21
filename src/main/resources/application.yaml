@@ -3,6 +3,10 @@ spring:
     name: team1
   config:
     import: optional:application-local.yaml
+  servlet:
+    multipart:
+      max-file-size: ${UPLOAD_MAX_FILE_SIZE:50MB}
+      max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:51MB}
   jpa:
     hibernate:
       ddl-auto: update
@@ -16,3 +20,8 @@ jwt:
   secret: ${JWT_SECRET}
   access-token-expiration: 1800000
   refresh-token-expiration: 1209600000
+
+app:
+  upload:
+    directory: ${UPLOAD_DIRECTORY:${java.io.tmpdir}/babylion-team1/uploads}
+    max-expanded-size: ${UPLOAD_MAX_EXPANDED_SIZE:100MB}
