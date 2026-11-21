@@ -6,6 +6,9 @@ import com.babylion.team1.domain.dashboard.dto.KpiCondition;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.TypedQuery;
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.Map;
+import java.util.TreeMap;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
@@ -19,17 +22,46 @@ public class DashboardQueryRepository {
 
     private final EntityManager em;
 
+    /** ConversationAggregate 필드 순서와 같다. 0~7번 컬럼 */
+    private static final String AGGREGATE_COLUMNS = """
+            count(c),
+            sum(case when c.isSuccess = true then 1 else 0 end),
+            sum(case when c.hasRework = true then 1 else 0 end),
+            sum(c.estimatedTokens),
+            sum(c.estimatedCost),
+            sum(c.reviewTimeSec),
+            sum(c.reworkTimeSec),
+            count(distinct c.user.id)
+            """;
+
+    /** 기간 전체를 하나로 집계한다 */
     public ConversationAggregate aggregateConversations(KpiCondition condition, DatePeriod period) {
+        String jpql = "select " + AGGREGATE_COLUMNS + conversationWhere(condition);
+        TypedQuery<Object[]> query = em.createQuery(jpql, Object[].class);
+        bindConversation(query, condition, period);
+        return toAggregate(query.getSingleResult());
+    }
+
+    /**
+     * conversation_date별로 집계한다. 대화가 있는 날만 담기며, 날짜 오름차순이다.
+     * 주 단위 묶음은 DB 함수에 의존하지 않도록 서비스에서 날짜별 결과를 합쳐서 만든다.
+     */
+    public Map<LocalDate, ConversationAggregate> aggregateConversationsByDate(KpiCondition condition, DatePeriod period) {
+        String jpql = "select " + AGGREGATE_COLUMNS + ", c.conversationDate " + conversationWhere(condition)
+                + " group by c.conversationDate";
+        TypedQuery<Object[]> query = em.createQuery(jpql, Object[].class);
+        bindConversation(query, condition, period);
+
+        Map<LocalDate, ConversationAggregate> result = new TreeMap<>();
+        for (Object[] row : query.getResultList()) {
+            result.put((LocalDate) row[8], toAggregate(row));
+        }
+        return result;
+    }
+
+    private String conversationWhere(KpiCondition condition) {
         StringBuilder jpql = new StringBuilder("""
-                select count(c),
-                       sum(case when c.isSuccess = true then 1 else 0 end),
-                       sum(case when c.hasRework = true then 1 else 0 end),
-                       sum(c.estimatedTokens),
-                       sum(c.estimatedCost),
-                       sum(c.reviewTimeSec),
-                       sum(c.reworkTimeSec),
-                       count(distinct c.user.id)
-                from Conversation c
+                 from Conversation c
                 where c.team.id = :teamId
                   and c.conversationDate between :from and :to
                 """);
@@ -42,14 +74,17 @@ public class DashboardQueryRepository {
         if (!condition.models().isEmpty()) {
             jpql.append(" and c.model in :models");
         }
+        return jpql.toString();
+    }
 
-        TypedQuery<Object[]> query = em.createQuery(jpql.toString(), Object[].class);
+    private void bindConversation(TypedQuery<?> query, KpiCondition condition, DatePeriod period) {
         bindCommon(query, condition, period);
         if (!condition.models().isEmpty()) {
             query.setParameter("models", condition.models());
         }
+    }
 
-        Object[] row = query.getSingleResult();
+    private ConversationAggregate toAggregate(Object[] row) {
         long conversationCount = toLong(row[0]);
         if (conversationCount == 0) {
             return ConversationAggregate.empty();
