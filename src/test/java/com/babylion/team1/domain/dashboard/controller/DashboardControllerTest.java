@@ -16,7 +16,7 @@ import com.babylion.team1.global.jwt.JwtProvider;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -70,10 +70,12 @@ class DashboardControllerTest {
 
     @BeforeEach
     void setUp() {
-        leader = saveUser("팀장", "kpi-leader@test.com");
-        member1 = saveUser("팀원1", "kpi-member1@test.com");
-        member2 = saveUser("팀원2", "kpi-member2@test.com");
-        outsider = saveUser("외부인", "kpi-outsider@test.com");
+        // 테스트도 로컬 DB를 쓰므로, 직접 가입해 둔 계정과 겹치지 않게 실행마다 고유한 이메일을 쓴다
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        leader = saveUser("팀장", "dashboard-it-leader-" + suffix + "@test.com");
+        member1 = saveUser("팀원1", "dashboard-it-member1-" + suffix + "@test.com");
+        member2 = saveUser("팀원2", "dashboard-it-member2-" + suffix + "@test.com");
+        outsider = saveUser("외부인", "dashboard-it-outsider-" + suffix + "@test.com");
 
         team = Team.builder().name("기획팀").description("설명").createdBy(leader).build();
         em.persist(team);
@@ -280,6 +282,29 @@ class DashboardControllerTest {
         mockMvc.perform(get(kpiUrl(team.getId())))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    @DisplayName("API 문서에 조회 조건이 개별 쿼리 파라미터로 노출된다")
+    void apiDocsExposeQueryParameters() throws Exception {
+        String params = "$.paths['/api/v1/teams/{teamId}/dashboard/kpis'].get.parameters";
+        mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath(params + "[?(@.name == 'from')].in").value("query"))
+                .andExpect(jsonPath(params + "[?(@.name == 'to')].in").value("query"))
+                .andExpect(jsonPath(params + "[?(@.name == 'unit')].in").value("query"))
+                .andExpect(jsonPath(params + "[?(@.name == 'taskTypes')].in").value("query"))
+                .andExpect(jsonPath(params + "[?(@.name == 'models')].in").value("query"))
+                .andExpect(jsonPath(params + "[?(@.name == 'request')]").isEmpty());
+    }
+
+    @Test
+    @DisplayName("Swagger처럼 배열을 같은 이름으로 반복해 보내도 필터가 적용된다")
+    void repeatedArrayParameters() throws Exception {
+        perform(leader, kpiUrl(team.getId()) + "?taskTypes=" + taskTypeA.getId() + "&taskTypes=" + taskTypeB.getId()
+                + "&models=gpt-4o-mini&models=o3")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conversationCount.value").value(1));
     }
 
     private ResultActions perform(User user, String url) throws Exception {
