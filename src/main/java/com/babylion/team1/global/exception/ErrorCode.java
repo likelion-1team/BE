@@ -39,6 +39,10 @@ public enum ErrorCode {
     NOT_A_MEMBER(HttpStatus.FORBIDDEN, "NOT_A_MEMBER", "팀 멤버만 접근할 수 있습니다."),
     TEAM_NOT_FOUND(HttpStatus.NOT_FOUND, "TEAM_NOT_FOUND", "팀을 찾을 수 없습니다."),
 
+    // Upload
+    INVALID_FILE_FORMAT(HttpStatus.BAD_REQUEST, "INVALID_FILE_FORMAT", "ChatGPT 내보내기 파일 형식을 확인해 주세요."),
+    FILE_TOO_LARGE(HttpStatus.CONTENT_TOO_LARGE, "FILE_TOO_LARGE", "파일이 허용 용량을 초과했습니다."),
+
     // Feedback
     FEEDBACK_NOT_SHARED(HttpStatus.BAD_REQUEST, "FEEDBACK_NOT_SHARED", "공유가 허용된 사례만 가이드로 지정할 수 있습니다.");
 
