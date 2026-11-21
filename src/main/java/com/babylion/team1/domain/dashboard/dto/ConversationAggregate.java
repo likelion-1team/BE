@@ -21,6 +21,22 @@ public record ConversationAggregate(
         return new ConversationAggregate(0, 0, 0, 0, BigDecimal.ZERO, 0, 0, 0);
     }
 
+    /**
+     * 두 집계를 더한다(예: 날짜별 집계를 주 단위로 합칠 때).
+     * 서로 다른 날의 제출 인원은 겹칠 수 있어 합산하지 않고 0으로 둔다. 제출 인원이 필요하면 기간 전체로 다시 집계한다.
+     */
+    public ConversationAggregate plus(ConversationAggregate other) {
+        return new ConversationAggregate(
+                conversationCount + other.conversationCount,
+                successCount + other.successCount,
+                reworkCount + other.reworkCount,
+                totalTokens + other.totalTokens,
+                totalCallCost.add(other.totalCallCost),
+                reviewTimeSec + other.reviewTimeSec,
+                reworkTimeSec + other.reworkTimeSec,
+                0);
+    }
+
     /** 추정 토큰 합(성공·실패 모두) / 성공 업무 수 */
     public BigDecimal tokensPerSuccess() {
         return divide(BigDecimal.valueOf(totalTokens), successCount, 2);

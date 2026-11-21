@@ -4,12 +4,17 @@ import com.babylion.team1.domain.dashboard.dto.ConversationAggregate;
 import com.babylion.team1.domain.dashboard.dto.DatePeriod;
 import com.babylion.team1.domain.dashboard.dto.KpiCondition;
 import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
+import com.babylion.team1.domain.dashboard.dto.request.KpiUnit;
 import com.babylion.team1.domain.dashboard.dto.request.OnboardingEffectRequest;
+import com.babylion.team1.domain.dashboard.dto.request.TrendMetric;
+import com.babylion.team1.domain.dashboard.dto.request.TrendRequest;
 import com.babylion.team1.domain.dashboard.dto.response.CoreMetrics;
 import com.babylion.team1.domain.dashboard.dto.response.CoverageResponse;
 import com.babylion.team1.domain.dashboard.dto.response.KpiResponse;
 import com.babylion.team1.domain.dashboard.dto.response.MetricValue;
 import com.babylion.team1.domain.dashboard.dto.response.OnboardingEffectResponse;
+import com.babylion.team1.domain.dashboard.dto.response.TrendPoint;
+import com.babylion.team1.domain.dashboard.dto.response.TrendResponse;
 import com.babylion.team1.domain.dashboard.repository.DashboardQueryRepository;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
@@ -19,8 +24,12 @@ import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.temporal.TemporalAdjusters;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -44,7 +53,7 @@ public class DashboardService {
         TeamMember member = getMember(teamId, userId);
         Optional<TeamSettings> settings = teamSettingsRepository.findByTeamId(teamId);
 
-        DatePeriod period = resolvePeriod(request, settings);
+        DatePeriod period = resolvePeriod(request.from(), request.to(), settings);
         DatePeriod prevPeriod = period.previous();
         KpiCondition condition = new KpiCondition(
                 teamId,
@@ -104,6 +113,56 @@ public class DashboardService {
         return OnboardingEffectResponse.of(onboardingStartDate, before, after);
     }
 
+    /**
+     * 선택한 지표의 날짜별(DAY) 또는 주별(WEEK, 월요일 시작) 추이. 팀원이면 본인 값, 팀장이면 팀 집계.
+     * 대화가 없는 날(주)도 빠짐없이 채워 날짜 오름차순으로 돌려준다.
+     * 표본 부족: 대화 수 < 하루 최소 대화 수 x 그 점에 포함된 일수(DAY면 1일, WEEK면 조회 기간 안에 든 일수).
+     */
+    public TrendResponse getTrends(Long teamId, Long userId, TrendRequest request) {
+        TrendMetric metric = TrendMetric.from(request.metric());
+        TeamMember member = getMember(teamId, userId);
+        Optional<TeamSettings> settings = teamSettingsRepository.findByTeamId(teamId);
+
+        DatePeriod period = resolvePeriod(request.from(), request.to(), settings);
+        KpiCondition condition = new KpiCondition(
+                teamId,
+                member.isLeader() ? null : userId,
+                request.taskTypes(),
+                request.models());
+        Map<LocalDate, ConversationAggregate> daily = dashboardQueryRepository.aggregateConversationsByDate(condition, period);
+
+        int minDailyConversations = settings.map(TeamSettings::getMinDailyConversations)
+                .orElse(TeamSettings.DEFAULT_MIN_DAILY_CONVERSATIONS);
+        int hourlyLaborCost = settings.map(TeamSettings::getHourlyLaborCost)
+                .orElse(TeamSettings.DEFAULT_HOURLY_LABOR_COST);
+
+        // 점(날짜 또는 주 시작일)마다 집계와 포함 일수를 모은다. LinkedHashMap이라 날짜 오름차순이 유지된다.
+        Map<LocalDate, ConversationAggregate> buckets = new LinkedHashMap<>();
+        Map<LocalDate, Integer> bucketDays = new LinkedHashMap<>();
+        for (LocalDate date = period.from(); !date.isAfter(period.to()); date = date.plusDays(1)) {
+            LocalDate bucket = request.unit() == KpiUnit.WEEK
+                    ? date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+                    : date;
+            ConversationAggregate dayAggregate = daily.getOrDefault(date, ConversationAggregate.empty());
+            buckets.merge(bucket, dayAggregate, ConversationAggregate::plus);
+            bucketDays.merge(bucket, 1, Integer::sum);
+        }
+
+        List<TrendPoint> points = buckets.entrySet().stream()
+                .map(entry -> {
+                    ConversationAggregate aggregate = entry.getValue();
+                    long threshold = (long) minDailyConversations * bucketDays.get(entry.getKey());
+                    return new TrendPoint(
+                            entry.getKey(),
+                            metric.calculate(aggregate, hourlyLaborCost),
+                            aggregate.conversationCount(),
+                            aggregate.conversationCount() < threshold);
+                })
+                .toList();
+
+        return TrendResponse.of(metric, settings.map(TeamSettings::getOnboardingStartDate).orElse(null), points);
+    }
+
     /** 온보딩 시작일이 대상 기간 밖이라 한쪽 기간이 비면(from > to) 대화 0건으로 본다 */
     private CoreMetrics aggregateCoreMetrics(KpiCondition condition, LocalDate from, LocalDate to) {
         if (from.isAfter(to)) {
@@ -125,12 +184,12 @@ public class DashboardService {
      * 입력하지 않은 쪽은 팀 대상 기간으로 채운다.
      * 그래도 비어 있으면 400 TARGET_NOT_SET, from > to면 400 INVALID_REQUEST
      */
-    private DatePeriod resolvePeriod(KpiRequest request, Optional<TeamSettings> settings) {
-        LocalDate from = request.from() != null
-                ? request.from()
+    private DatePeriod resolvePeriod(LocalDate requestFrom, LocalDate requestTo, Optional<TeamSettings> settings) {
+        LocalDate from = requestFrom != null
+                ? requestFrom
                 : settings.map(TeamSettings::getTargetFrom).orElse(null);
-        LocalDate to = request.to() != null
-                ? request.to()
+        LocalDate to = requestTo != null
+                ? requestTo
                 : settings.map(TeamSettings::getTargetTo).orElse(null);
         if (from == null || to == null) {
             throw new CustomException(ErrorCode.TARGET_NOT_SET);
