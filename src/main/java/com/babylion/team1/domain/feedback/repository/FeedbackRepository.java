@@ -2,18 +2,25 @@ package com.babylion.team1.domain.feedback.repository;
 
 import com.babylion.team1.domain.feedback.entity.Feedback;
 import com.babylion.team1.domain.feedback.entity.ReactionType;
+import jakarta.persistence.LockModeType;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface FeedbackRepository extends JpaRepository<Feedback, Long> {
 
     List<Feedback> findByUploadId(Long uploadId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select f from Feedback f where f.id = :feedbackId")
+    Optional<Feedback> findByIdForUpdate(@Param("feedbackId") Long feedbackId);
 
     String MY_FEEDBACK_SCOPE = """
             where f.team.id = :teamId and f.user.id = :userId
