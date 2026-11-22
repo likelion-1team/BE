@@ -10,6 +10,7 @@ import com.babylion.team1.domain.dashboard.dto.request.TrendMetric;
 import com.babylion.team1.domain.dashboard.dto.request.TrendRequest;
 import com.babylion.team1.domain.dashboard.dto.response.CoreMetrics;
 import com.babylion.team1.domain.dashboard.dto.response.CoverageResponse;
+import com.babylion.team1.domain.dashboard.dto.response.FilterOptionsResponse;
 import com.babylion.team1.domain.dashboard.dto.response.KpiResponse;
 import com.babylion.team1.domain.dashboard.dto.response.MetricValue;
 import com.babylion.team1.domain.dashboard.dto.response.OnboardingEffectResponse;
@@ -169,6 +170,22 @@ public class DashboardService {
             return CoreMetrics.from(ConversationAggregate.empty());
         }
         return CoreMetrics.from(dashboardQueryRepository.aggregateConversations(condition, new DatePeriod(from, to)));
+    }
+
+    /**
+     * 대시보드 필터 옵션. 팀원이면 본인 대화, 팀장이면 팀 전체 대화 기준.
+     * 대상 기간과 상관없이 저장된 대화 전체에서 뽑는다.
+     */
+    public FilterOptionsResponse getFilterOptions(Long teamId, Long userId) {
+        TeamMember member = getMember(teamId, userId);
+        Long scopeUserId = member.isLeader() ? null : userId;
+
+        LocalDate[] dateRange = dashboardQueryRepository.findConversationDateRange(teamId, scopeUserId);
+        return new FilterOptionsResponse(
+                dashboardQueryRepository.findConversationTaskTypes(teamId, scopeUserId),
+                dashboardQueryRepository.findConversationModels(teamId, scopeUserId),
+                dateRange[0],
+                dateRange[1]);
     }
 
     /** 팀이 없으면 404 TEAM_NOT_FOUND, 팀 멤버가 아니면 403 NOT_A_MEMBER */

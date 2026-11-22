@@ -3,10 +3,12 @@ package com.babylion.team1.domain.dashboard.repository;
 import com.babylion.team1.domain.dashboard.dto.ConversationAggregate;
 import com.babylion.team1.domain.dashboard.dto.DatePeriod;
 import com.babylion.team1.domain.dashboard.dto.KpiCondition;
+import com.babylion.team1.domain.dashboard.dto.response.TaskTypeOption;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.TypedQuery;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import lombok.RequiredArgsConstructor;
@@ -122,6 +124,46 @@ public class DashboardQueryRepository {
         bindCommon(query, condition, period);
         BigDecimal sum = query.getSingleResult();
         return sum != null ? sum : BigDecimal.ZERO;
+    }
+
+    /** 대화에 등장한 업무 유형(id 오름차순). userId가 null이면 팀 전체 */
+    public List<TaskTypeOption> findConversationTaskTypes(Long teamId, Long userId) {
+        String jpql = "select distinct t.id, t.name from Conversation c join c.taskType t"
+                + scopeWhere(userId) + " order by t.id";
+        TypedQuery<Object[]> query = em.createQuery(jpql, Object[].class);
+        bindScope(query, teamId, userId);
+        return query.getResultList().stream()
+                .map(row -> new TaskTypeOption((Long) row[0], (String) row[1]))
+                .toList();
+    }
+
+    /** 대화에 등장한 모델(NULL 제외, 이름 오름차순). userId가 null이면 팀 전체 */
+    public List<String> findConversationModels(Long teamId, Long userId) {
+        String jpql = "select distinct c.model from Conversation c"
+                + scopeWhere(userId) + " and c.model is not null order by c.model";
+        TypedQuery<String> query = em.createQuery(jpql, String.class);
+        bindScope(query, teamId, userId);
+        return query.getResultList();
+    }
+
+    /** 대화가 있는 첫날·마지막 날. 대화가 없으면 [null, null] */
+    public LocalDate[] findConversationDateRange(Long teamId, Long userId) {
+        String jpql = "select min(c.conversationDate), max(c.conversationDate) from Conversation c" + scopeWhere(userId);
+        TypedQuery<Object[]> query = em.createQuery(jpql, Object[].class);
+        bindScope(query, teamId, userId);
+        Object[] row = query.getSingleResult();
+        return new LocalDate[] {(LocalDate) row[0], (LocalDate) row[1]};
+    }
+
+    private String scopeWhere(Long userId) {
+        return " where c.team.id = :teamId" + (userId != null ? " and c.user.id = :userId" : "");
+    }
+
+    private void bindScope(TypedQuery<?> query, Long teamId, Long userId) {
+        query.setParameter("teamId", teamId);
+        if (userId != null) {
+            query.setParameter("userId", userId);
+        }
     }
 
     private void bindCommon(TypedQuery<?> query, KpiCondition condition, DatePeriod period) {
