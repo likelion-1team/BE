@@ -1,6 +1,7 @@
 package com.babylion.team1.domain.team.repository;
 
 import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
+import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import java.util.List;
 import java.util.Optional;
@@ -26,4 +27,22 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 		order by team.createdAt desc, team.id desc
 		""")
 	List<MyTeamResponse> findMyTeams(@Param("userId") Long userId);
+
+	@Query("""
+		select new com.babylion.team1.domain.team.dto.response.TeamMemberListResponse(
+			rosterUser.id, rosterUser.name, rosterUser.email, membership.role,
+			case when exists (
+				select 1 from Conversation c
+				where c.team = membership.team
+				  and c.user = rosterUser
+				  and c.conversationDate between settings.targetFrom and settings.targetTo
+				  and c.upload.status = com.babylion.team1.domain.upload.entity.UploadStatus.DONE
+			) then true else false end)
+		from TeamMember membership
+		join membership.user rosterUser
+		left join TeamSettings settings on settings.team = membership.team
+		where membership.team.id = :teamId
+		order by membership.joinedAt, membership.id
+		""")
+	List<TeamMemberListResponse> findTeamMembersWithSubmission(@Param("teamId") Long teamId);
 }
