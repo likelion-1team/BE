@@ -3,11 +3,13 @@ package com.babylion.team1.domain.team.entity;
 import jakarta.persistence.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.ColumnDefault;
-import org.hibernate.annotations.UpdateTimestamp;
 
 /** 분석 대상 기간·온보딩 시작일·기준값 (teams와 1:1, 팀 생성 시 기본값으로 생성) */
 @Entity
@@ -15,6 +17,8 @@ import org.hibernate.annotations.UpdateTimestamp;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class TeamSettings {
+
+	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 
 	/** 표본 부족 기준 기본값(하루 최소 대화 수). 팀 결정 전 임시값 */
 	public static final int DEFAULT_MIN_DAILY_CONVERSATIONS = 3;
@@ -54,12 +58,12 @@ public class TeamSettings {
 	@Column(name = "hourly_labor_cost", nullable = false)
 	private Integer hourlyLaborCost = DEFAULT_HOURLY_LABOR_COST;
 
-	@UpdateTimestamp
 	@Column(name = "updated_at", nullable = false)
 	private LocalDateTime updatedAt;
 
 	private TeamSettings(Team team) {
 		this.team = team;
+		this.updatedAt = nowInKst();
 	}
 
 	/** 팀 생성 시 기본값으로 생성 */
@@ -72,6 +76,15 @@ public class TeamSettings {
 		this.targetTo = targetTo;
 		this.onboardingStartDate = onboardingStartDate;
 		this.targetCount = targetCount;
+		this.updatedAt = nowInKst();
+	}
+
+	public OffsetDateTime updatedAtInKst() {
+		return updatedAt.atZone(KST).toOffsetDateTime();
+	}
+
+	private static LocalDateTime nowInKst() {
+		return LocalDateTime.now(KST).truncatedTo(ChronoUnit.MICROS);
 	}
 
 	public boolean isTargetSet() {
