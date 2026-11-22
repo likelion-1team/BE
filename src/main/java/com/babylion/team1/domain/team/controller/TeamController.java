@@ -1,5 +1,7 @@
 package com.babylion.team1.domain.team.controller;
 
+import com.babylion.team1.domain.feedback.dto.response.GuidesResponse;
+import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
 import com.babylion.team1.domain.team.dto.request.TeamSettingsUpdateRequest;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -64,6 +67,25 @@ public class TeamController {
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId) {
         return ApiResponse.success("S200", "조회 성공", teamService.getTeamMembers(teamId, userId));
+    }
+
+    @Operation(summary = "공유 사례 목록 조회")
+    @GetMapping("/{teamId}/shared-cases")
+    public ApiResponse<SharedCasesResponse> getSharedCases(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId,
+            @RequestParam(name = "taskType", required = false) Long taskTypeId,
+            @RequestParam(required = false) String type) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getSharedCases(teamId, userId, taskTypeId, type));
+    }
+
+    @Operation(summary = "가이드 목록 조회")
+    @GetMapping("/{teamId}/guides")
+    public ApiResponse<GuidesResponse> getGuides(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId,
+            @RequestParam(required = false) String type) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getGuides(teamId, userId, type));
     }
 
     @Operation(summary = "분석 대상·평가 기준 조회")
