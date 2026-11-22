@@ -6,6 +6,7 @@ import com.babylion.team1.domain.team.dto.request.TeamSettingsUpdateRequest;
 import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
 import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
+import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSettingsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSettingsUpdateResponse;
 import com.babylion.team1.domain.team.entity.Team;
@@ -77,6 +78,13 @@ public class TeamService {
         }
 
         return new TeamMemberAddResponse(user.getId(), user.getName(), membership.getRole());
+    }
+
+    @Transactional(readOnly = true)
+    public List<TeamMemberListResponse> getTeamMembers(Long teamId, Long userId) {
+        findTeam(teamId);
+        requireTeamLeader(teamId, userId);
+        return teamMemberRepository.findTeamMembersWithSubmission(teamId);
     }
 
     @Transactional(readOnly = true)

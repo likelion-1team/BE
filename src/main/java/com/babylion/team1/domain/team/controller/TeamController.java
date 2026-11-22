@@ -6,6 +6,7 @@ import com.babylion.team1.domain.team.dto.request.TeamSettingsUpdateRequest;
 import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
 import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
+import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSettingsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSettingsUpdateResponse;
 import com.babylion.team1.domain.team.service.TeamService;
@@ -55,6 +56,14 @@ public class TeamController {
             @AuthenticationPrincipal Long userId,
             @Valid @RequestBody TeamMemberAddRequest request) {
         return ApiResponse.success("S201", "팀원 추가 성공", teamService.addMember(teamId, userId, request));
+    }
+
+    @Operation(summary = "팀원 목록 및 제출 여부 조회")
+    @GetMapping("/{teamId}/members")
+    public ApiResponse<List<TeamMemberListResponse>> getTeamMembers(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getTeamMembers(teamId, userId));
     }
 
     @Operation(summary = "분석 대상·평가 기준 조회")
