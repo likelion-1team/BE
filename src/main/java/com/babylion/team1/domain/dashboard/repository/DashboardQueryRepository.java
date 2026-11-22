@@ -5,11 +5,13 @@ import com.babylion.team1.domain.dashboard.dto.CostRow;
 import com.babylion.team1.domain.dashboard.dto.request.CostGroupBy;
 import com.babylion.team1.domain.dashboard.dto.DatePeriod;
 import com.babylion.team1.domain.dashboard.dto.KpiCondition;
+import com.babylion.team1.domain.dashboard.dto.response.DayConversationItem;
 import com.babylion.team1.domain.dashboard.dto.response.TaskTypeOption;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.TypedQuery;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -210,6 +212,35 @@ public class DashboardQueryRepository {
             }
         }
         return result;
+    }
+
+    /** 그날(conversation_date) 본인 대화 목록. startedAt 오름차순, 같으면 id 순 */
+    public List<DayConversationItem> findDayConversations(Long teamId, Long userId, LocalDate date) {
+        String jpql = """
+                select c.id, c.title, c.startedAt, c.model, t.name,
+                       c.turnCount, c.estimatedTokens, c.isSuccess, c.hasRework
+                from Conversation c join c.taskType t
+                where c.team.id = :teamId
+                  and c.user.id = :userId
+                  and c.conversationDate = :date
+                order by c.startedAt, c.id
+                """;
+        return em.createQuery(jpql, Object[].class)
+                .setParameter("teamId", teamId)
+                .setParameter("userId", userId)
+                .setParameter("date", date)
+                .getResultList().stream()
+                .map(row -> new DayConversationItem(
+                        (Long) row[0],
+                        (String) row[1],
+                        (LocalDateTime) row[2],
+                        (String) row[3],
+                        (String) row[4],
+                        (Integer) row[5],
+                        (Integer) row[6],
+                        (Boolean) row[7],
+                        (Boolean) row[8]))
+                .toList();
     }
 
     /** 대화에 등장한 업무 유형(id 오름차순). userId가 null이면 팀 전체 */
