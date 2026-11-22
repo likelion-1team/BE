@@ -3,6 +3,7 @@ package com.babylion.team1.domain.team.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -33,6 +34,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -44,6 +46,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 class SharedFeedbackControllerIntegrationTest {
 
+    private static final String SHARE = "/api/v1/feedbacks/{feedbackId}/share";
     private static final String SHARED_CASES = "/api/v1/teams/{teamId}/shared-cases";
     private static final String MY_FEEDBACKS = "/api/v1/teams/{teamId}/feedbacks";
     private static final String GUIDES = "/api/v1/teams/{teamId}/guides";
@@ -267,14 +270,51 @@ class SharedFeedbackControllerIntegrationTest {
         TeamFixture fixture = saveTeam();
         Long teamId = fixture.team().getId();
         Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "공유 사례", "개선 후 예시");
-        publishGuide(feedback);
+        entityManager.flush();
+        entityManager.clear();
+
+        share(feedback.getId(), fixture.member(), "{\"shared\":true}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.message").value("공유 설정 변경 성공"))
+                .andExpect(jsonPath("$.data.isShared").value(true));
+        entityManager.find(Feedback.class, feedback.getId()).addToGuide();
 
         request(SHARED_CASES, teamId, fixture.leader()).andExpect(jsonPath("$.data.items.length()").value(1));
         request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.groups.length()").value(1));
 
-        feedback.unshare();
+        share(feedback.getId(), fixture.member(), "{\"shared\":false}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.isShared").value(false));
+        entityManager.flush();
+        entityManager.clear();
+        Feedback revoked = entityManager.find(Feedback.class, feedback.getId());
+        assertThat(revoked.getIsGuide()).isFalse();
+        assertThat(revoked.getSharedAt()).isNull();
+        assertThat(revoked.getGuideAddedAt()).isNull();
         request(SHARED_CASES, teamId, fixture.leader()).andExpect(jsonPath("$.data.items").isEmpty());
         request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.groups").isEmpty());
+    }
+
+    @Test
+    void shareRequiresAuthenticationOwnershipAndExplicitState() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "공유 사례", null);
+        Long feedbackId = feedback.getId();
+
+        mockMvc.perform(patch(SHARE, feedbackId).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"shared\":true}"))
+                .andExpect(status().isUnauthorized());
+        share(feedbackId, fixture.leader(), "{\"shared\":true}")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("NOT_FEEDBACK_OWNER"));
+        share(Long.MAX_VALUE, fixture.member(), "{\"shared\":true}")
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
+        share(feedbackId, fixture.member(), "{}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        assertThat(feedback.getIsShared()).isFalse();
     }
 
     @Test
@@ -452,6 +492,13 @@ class SharedFeedbackControllerIntegrationTest {
 
     private void setGuideDate(Feedback feedback, LocalDateTime date) {
         jdbc.update("update feedbacks set guide_added_at = ? where id = ?", date, feedback.getId());
+    }
+
+    private ResultActions share(Long feedbackId, User user, String body) throws Exception {
+        return mockMvc.perform(patch(SHARE, feedbackId)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body));
     }
 
     private ResultActions request(String path, Long teamId, User user, String... params) throws Exception {
