@@ -1,5 +1,6 @@
 package com.babylion.team1.domain.upload.service;
 
+import com.babylion.team1.domain.feedback.entity.FeedbackType;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -46,16 +47,16 @@ class AnalysisFeedbackRules {
     }
 
     enum Type {
-        MISSING_CONTEXT("맥락 누락", "초반에 수정 요청이 반복됐어요.", "첫 질문에 목적, 제약과 원하는 결과 형식을 적어보세요."),
-        LONG_CONVERSATION("긴 대화", "대화의 맥락이 길어졌어요.", "핵심 내용을 요약한 뒤 새 대화에서 이어가 보세요."),
-        OVERSPEC_MODEL("과한 모델", "짧은 작업에 고비용 모델을 사용했어요.", "같은 작업을 저비용 모델로 먼저 시도해 보세요.");
+        MISSING_CONTEXT(FeedbackType.MISSING_CONTEXT, "초반에 수정 요청이 반복됐어요.", "첫 질문에 목적, 제약과 원하는 결과 형식을 적어보세요."),
+        LONG_CONVERSATION(FeedbackType.LONG_CONVERSATION, "대화의 맥락이 길어졌어요.", "핵심 내용을 요약한 뒤 새 대화에서 이어가 보세요."),
+        OVERSPEC_MODEL(FeedbackType.OVERSPEC_MODEL, "짧은 작업에 고비용 모델을 사용했어요.", "같은 작업을 저비용 모델로 먼저 시도해 보세요.");
 
         final String title;
         final String problem;
         final String improvement;
 
-        Type(String title, String problem, String improvement) {
-            this.title = title;
+        Type(FeedbackType feedbackType, String problem, String improvement) {
+            this.title = feedbackType.getLabel();
             this.problem = problem;
             this.improvement = improvement;
         }

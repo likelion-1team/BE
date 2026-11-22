@@ -10,6 +10,8 @@ import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.AccessLevel;
@@ -32,6 +34,8 @@ import org.hibernate.type.SqlTypes;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Feedback {
+
+	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -161,7 +165,7 @@ public class Feedback {
 			return;
 		}
 		this.isShared = true;
-		this.sharedAt = LocalDateTime.now();
+		this.sharedAt = LocalDateTime.now(KST);
 	}
 
 	/** 공유 해제. 가이드에서도 자동 해제 */
@@ -180,7 +184,11 @@ public class Feedback {
 			return;
 		}
 		this.isGuide = true;
-		this.guideAddedAt = LocalDateTime.now();
+		this.guideAddedAt = LocalDateTime.now(KST);
+	}
+
+	public OffsetDateTime guideAddedAtInKst() {
+		return guideAddedAt == null ? null : guideAddedAt.atZone(KST).toOffsetDateTime();
 	}
 
 	public void removeFromGuide() {
