@@ -9,13 +9,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.babylion.team1.domain.conversation.entity.Conversation;
+import com.babylion.team1.domain.dashboard.DashboardFixture;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -26,7 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.HttpHeaders;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,6 +43,7 @@ import org.springframework.transaction.annotation.Transactional;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
+@Import(DashboardFixture.class)
 class DayDetailControllerTest {
 
     private static final LocalDate DAY = LocalDate.of(2026, 11, 5);
@@ -55,47 +55,46 @@ class DayDetailControllerTest {
     private EntityManager em;
 
     @Autowired
-    private JwtProvider jwtProvider;
+    private DashboardFixture fixture;
 
     private User leader;
     private User member1;
     private User outsider;
     private Team team;
-    private int externalIdSeq;
 
     @BeforeEach
     void setUp() {
         // 테스트도 로컬 DB를 쓰므로, 직접 가입해 둔 계정과 겹치지 않게 실행마다 고유한 이메일을 쓴다
         String suffix = UUID.randomUUID().toString().substring(0, 8);
-        leader = saveUser("팀장", "day-it-leader-" + suffix + "@test.com");
-        member1 = saveUser("김팀원", "day-it-member1-" + suffix + "@test.com");
-        User member2 = saveUser("이팀원", "day-it-member2-" + suffix + "@test.com");
-        outsider = saveUser("외부인", "day-it-outsider-" + suffix + "@test.com");
+        leader = fixture.user("팀장", "day-it-leader-" + suffix + "@test.com");
+        member1 = fixture.user("김팀원", "day-it-member1-" + suffix + "@test.com");
+        User member2 = fixture.user("이팀원", "day-it-member2-" + suffix + "@test.com");
+        outsider = fixture.user("외부인", "day-it-outsider-" + suffix + "@test.com");
 
-        team = saveTeam("기획팀", leader);
+        team = fixture.team("기획팀", leader);
         em.persist(TeamMember.leader(team, leader));
         em.persist(TeamMember.member(team, member1));
         em.persist(TeamMember.member(team, member2));
 
-        TeamTaskType report = saveTaskType(team, "주간 보고서 작성");
-        TeamTaskType minutes = saveTaskType(team, "회의록 정리");
+        TeamTaskType report = fixture.taskType(team, "주간 보고서 작성");
+        TeamTaskType minutes = fixture.taskType(team, "회의록 정리");
 
-        Upload upload1 = saveUpload(team, member1);
-        Upload upload2 = saveUpload(team, member2);
+        Upload upload1 = fixture.upload(team, member1);
+        Upload upload2 = fixture.upload(team, member2);
 
-        saveConversation(team, upload1, member1, report, "보고서 초안", "gpt-4o", DAY.atTime(10, 0), 4, 1000, true, false);
-        saveConversation(team, upload1, member1, minutes, "회의록 요약", "o3", DAY.atTime(9, 0), 6, 1500, false, true);
-        saveConversation(team, upload2, member2, report, "팀원2 비밀 제목", "gpt-4o", DAY.atTime(11, 0), 4, 2000, true, true);
-        saveConversation(team, upload1, member1, report, "다음 날 대화", "gpt-4o", DAY.plusDays(1).atTime(10, 0), 4, 500,
+        saveConversation(upload1, member1, report, "보고서 초안", "gpt-4o", DAY.atTime(10, 0), 4, 1000, true, false);
+        saveConversation(upload1, member1, minutes, "회의록 요약", "o3", DAY.atTime(9, 0), 6, 1500, false, true);
+        saveConversation(upload2, member2, report, "팀원2 비밀 제목", "gpt-4o", DAY.atTime(11, 0), 4, 2000, true, true);
+        saveConversation(upload1, member1, report, "다음 날 대화", "gpt-4o", DAY.plusDays(1).atTime(10, 0), 4, 500,
                 true, false);
-        saveConversation(team, saveUpload(team, leader), leader, report, "팀장 본인 보고서", "gpt-4o", DAY.atTime(8, 0), 3,
+        saveConversation(fixture.upload(team, leader), leader, report, "팀장 본인 보고서", "gpt-4o", DAY.atTime(8, 0), 3,
                 600, true, false);
 
         // 같은 날 다른 팀 대화: outsider가 팀장
-        Team otherTeam = saveTeam("다른 팀", outsider);
+        Team otherTeam = fixture.team("다른 팀", outsider);
         em.persist(TeamMember.leader(otherTeam, outsider));
-        TeamTaskType otherTaskType = saveTaskType(otherTeam, "다른 팀 업무");
-        saveConversation(otherTeam, saveUpload(otherTeam, outsider), outsider, otherTaskType, "다른 팀 대화", "gpt-4o",
+        TeamTaskType otherTaskType = fixture.taskType(otherTeam, "다른 팀 업무");
+        saveConversation(fixture.upload(otherTeam, outsider), outsider, otherTaskType, "다른 팀 대화", "gpt-4o",
                 DAY.atTime(12, 0), 4, 700, true, false);
 
         em.flush();
@@ -212,47 +211,18 @@ class DayDetailControllerTest {
     }
 
     private ResultActions perform(User user, String url) throws Exception {
-        return mockMvc.perform(get(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId())));
+        return mockMvc.perform(fixture.get(user, url));
     }
 
     private String url(Long teamId, String date) {
         return "/api/v1/teams/" + teamId + "/days/" + date;
     }
 
-    private User saveUser(String name, String email) {
-        User user = User.builder().name(name).email(email).passwordHash("hashed-password").build();
-        em.persist(user);
-        return user;
-    }
-
-    private Team saveTeam(String name, User createdBy) {
-        Team saved = Team.builder().name(name).description("설명").createdBy(createdBy).build();
-        em.persist(saved);
-        return saved;
-    }
-
-    private TeamTaskType saveTaskType(Team owner, String name) {
-        TeamTaskType taskType = TeamTaskType.builder().team(owner).name(name).successDefinition("성공 정의").build();
-        em.persist(taskType);
-        return taskType;
-    }
-
-    private Upload saveUpload(Team owner, User uploader) {
-        Upload upload = Upload.builder().team(owner).uploader(uploader).fileName("conversations.json")
-                .conversationCount(10).build();
-        em.persist(upload);
-        return upload;
-    }
-
-    private void saveConversation(Team owner, Upload upload, User user, TeamTaskType taskType, String title,
+    /** 대화의 팀은 upload의 팀을 따른다 */
+    private void saveConversation(Upload upload, User user, TeamTaskType taskType, String title,
             String model, LocalDateTime startedAt, int turns, int tokens, boolean success, boolean rework) {
-        em.persist(Conversation.builder()
-                .team(owner).upload(upload).user(user).taskType(taskType)
-                .externalId("day-ext-" + (++externalIdSeq)).title(title).model(model)
-                .startedAt(startedAt).conversationDate(startedAt.toLocalDate())
-                .turnCount(turns).estimatedTokens(tokens)
-                .isSuccess(success).hasRework(rework)
-                .build());
+        fixture.save(fixture.conversation(upload, user, taskType, startedAt)
+                .title(title).model(model).turnCount(turns).estimatedTokens(tokens)
+                .isSuccess(success).hasRework(rework));
     }
 }
