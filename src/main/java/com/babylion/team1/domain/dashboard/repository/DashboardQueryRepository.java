@@ -8,6 +8,8 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.TypedQuery;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -124,6 +126,57 @@ public class DashboardQueryRepository {
         bindCommon(query, condition, period);
         BigDecimal sum = query.getSingleResult();
         return sum != null ? sum : BigDecimal.ZERO;
+    }
+
+    /**
+     * 업무 유형별로 집계한다. 기간 안에 대화가 있는 업무 유형만 담기며, 업무 유형 id 오름차순이다.
+     * 결과에 사용자 정보는 들어가지 않는다.
+     */
+    public Map<TaskTypeOption, ConversationAggregate> aggregateConversationsByTaskType(KpiCondition condition,
+            DatePeriod period) {
+        String jpql = "select " + AGGREGATE_COLUMNS + ", c.taskType.id, c.taskType.name " + conversationWhere(condition)
+                + " group by c.taskType.id, c.taskType.name order by c.taskType.id";
+        TypedQuery<Object[]> query = em.createQuery(jpql, Object[].class);
+        bindConversation(query, condition, period);
+
+        Map<TaskTypeOption, ConversationAggregate> result = new LinkedHashMap<>();
+        for (Object[] row : query.getResultList()) {
+            result.put(new TaskTypeOption((Long) row[8], (String) row[9]), toAggregate(row));
+        }
+        return result;
+    }
+
+    /**
+     * 업무 유형별로 가장 많이 나온 피드백 유형을 최대 limit개씩 돌려준다(key: 업무 유형 id).
+     * 같은 기간(feedback_date 기준) 피드백 건수가 많은 순, 건수가 같으면 유형 이름순이다.
+     * feedbacks에는 모델 정보가 없어 models 필터는 적용하지 않는다.
+     */
+    public Map<Long, List<String>> findTopFeedbackTypes(KpiCondition condition, DatePeriod period, int limit) {
+        StringBuilder jpql = new StringBuilder("""
+                select f.taskType.id, f.type, count(f)
+                from Feedback f
+                where f.team.id = :teamId
+                  and f.feedbackDate between :from and :to
+                """);
+        if (condition.userId() != null) {
+            jpql.append(" and f.user.id = :userId");
+        }
+        if (!condition.taskTypeIds().isEmpty()) {
+            jpql.append(" and f.taskType.id in :taskTypeIds");
+        }
+        jpql.append(" group by f.taskType.id, f.type order by f.taskType.id, count(f) desc, f.type");
+
+        TypedQuery<Object[]> query = em.createQuery(jpql.toString(), Object[].class);
+        bindCommon(query, condition, period);
+
+        Map<Long, List<String>> result = new LinkedHashMap<>();
+        for (Object[] row : query.getResultList()) {
+            List<String> types = result.computeIfAbsent((Long) row[0], id -> new ArrayList<>());
+            if (types.size() < limit) {
+                types.add((String) row[1]);
+            }
+        }
+        return result;
     }
 
     /** 대화에 등장한 업무 유형(id 오름차순). userId가 null이면 팀 전체 */
