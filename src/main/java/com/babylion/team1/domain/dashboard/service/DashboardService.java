@@ -8,6 +8,8 @@ import com.babylion.team1.domain.dashboard.dto.request.CostGroupBy;
 import com.babylion.team1.domain.dashboard.dto.response.CostBreakdownResponse;
 import com.babylion.team1.domain.dashboard.dto.response.CostItem;
 import com.babylion.team1.domain.dashboard.dto.response.CostPoint;
+import com.babylion.team1.domain.dashboard.dto.response.DayDetailResponse;
+import com.babylion.team1.domain.dashboard.dto.response.DayTaskTypeItem;
 import com.babylion.team1.domain.dashboard.dto.DatePeriod;
 import com.babylion.team1.domain.dashboard.dto.KpiCondition;
 import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
@@ -38,6 +40,7 @@ import com.babylion.team1.global.exception.ErrorCode;
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.time.temporal.TemporalAdjusters;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -302,6 +305,38 @@ public class DashboardService {
                 .sorted(TaskTypeStatsItem.REWORK_RATE_DESC)
                 .toList();
         return new TaskTypeStatsResponse(items);
+    }
+
+    /**
+     * 차트에서 클릭한 날짜의 상세. 팀원이면 그날 본인 대화 목록, 팀장이면 그날 업무 유형별 건수·지표만 돌려준다.
+     * 팀장 응답에는 개인 식별 정보(user_id, 대화 제목 등)를 넣지 않는다.
+     */
+    public DayDetailResponse getDayDetail(Long teamId, Long userId, String dateValue) {
+        LocalDate date = parseDate(dateValue);
+        TeamMember member = getMember(teamId, userId);
+
+        if (!member.isLeader()) {
+            return DayDetailResponse.forMember(date, dashboardQueryRepository.findDayConversations(teamId, userId, date));
+        }
+        KpiCondition condition = new KpiCondition(teamId, null, List.of(), List.of());
+        List<DayTaskTypeItem> taskTypes = dashboardQueryRepository
+                .aggregateConversationsByTaskType(condition, new DatePeriod(date, date))
+                .entrySet().stream()
+                .map(entry -> DayTaskTypeItem.of(entry.getKey().name(), entry.getValue()))
+                .toList();
+        return DayDetailResponse.forLeader(date, taskTypes);
+    }
+
+    /**
+     * yyyy-MM-dd 문자열을 날짜로 바꾼다. 형식이 잘못되면 400 INVALID_REQUEST.
+     * LocalDate로 바로 받으면 전역 처리기가 400 INVALID_TYPE으로 응답하는데, 이 동작은 다른 API도 쓰고 있어 바꾸지 않는다.
+     */
+    private LocalDate parseDate(String value) {
+        try {
+            return LocalDate.parse(value);
+        } catch (DateTimeParseException e) {
+            throw new CustomException(ErrorCode.INVALID_REQUEST, "날짜는 yyyy-MM-dd 형식이어야 합니다.");
+        }
     }
 
     /** 팀이 없으면 404 TEAM_NOT_FOUND, 팀 멤버가 아니면 403 NOT_A_MEMBER */
