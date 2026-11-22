@@ -6,6 +6,7 @@ import com.babylion.team1.domain.dashboard.dto.KpiCondition;
 import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
 import com.babylion.team1.domain.dashboard.dto.request.KpiUnit;
 import com.babylion.team1.domain.dashboard.dto.request.OnboardingEffectRequest;
+import com.babylion.team1.domain.dashboard.dto.request.TaskTypeStatsRequest;
 import com.babylion.team1.domain.dashboard.dto.request.TrendMetric;
 import com.babylion.team1.domain.dashboard.dto.request.TrendRequest;
 import com.babylion.team1.domain.dashboard.dto.response.CoreMetrics;
@@ -14,6 +15,9 @@ import com.babylion.team1.domain.dashboard.dto.response.FilterOptionsResponse;
 import com.babylion.team1.domain.dashboard.dto.response.KpiResponse;
 import com.babylion.team1.domain.dashboard.dto.response.MetricValue;
 import com.babylion.team1.domain.dashboard.dto.response.OnboardingEffectResponse;
+import com.babylion.team1.domain.dashboard.dto.response.TaskTypeOption;
+import com.babylion.team1.domain.dashboard.dto.response.TaskTypeStatsItem;
+import com.babylion.team1.domain.dashboard.dto.response.TaskTypeStatsResponse;
 import com.babylion.team1.domain.dashboard.dto.response.TrendPoint;
 import com.babylion.team1.domain.dashboard.dto.response.TrendResponse;
 import com.babylion.team1.domain.dashboard.repository.DashboardQueryRepository;
@@ -40,6 +44,9 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class DashboardService {
+
+    /** 교육 필요 업무에서 업무 유형마다 보여줄 피드백 유형 수 */
+    private static final int TOP_FEEDBACK_TYPE_LIMIT = 3;
 
     private final TeamRepository teamRepository;
     private final TeamMemberRepository teamMemberRepository;
@@ -186,6 +193,35 @@ public class DashboardService {
                 dashboardQueryRepository.findConversationModels(teamId, scopeUserId),
                 dateRange[0],
                 dateRange[1]);
+    }
+
+    /**
+     * 교육 필요 업무(팀장 전용). 업무 유형별 재작업률·성공 업무당 토큰·대화 수·상위 피드백 유형을
+     * 재작업률 높은 순으로 돌려준다. 항상 팀 전체 집계이며 개인 식별 정보는 내려주지 않는다.
+     * 팀원이면 403 LEADER_ONLY.
+     */
+    public TaskTypeStatsResponse getTaskTypeStats(Long teamId, Long userId, TaskTypeStatsRequest request) {
+        TeamMember member = getMember(teamId, userId);
+        if (!member.isLeader()) {
+            throw new CustomException(ErrorCode.LEADER_ONLY);
+        }
+        Optional<TeamSettings> settings = teamSettingsRepository.findByTeamId(teamId);
+        DatePeriod period = resolvePeriod(request.from(), request.to(), settings);
+        KpiCondition condition = new KpiCondition(teamId, null, List.of(), List.of());
+
+        Map<TaskTypeOption, ConversationAggregate> byTaskType =
+                dashboardQueryRepository.aggregateConversationsByTaskType(condition, period);
+        Map<Long, List<String>> topFeedbackTypes =
+                dashboardQueryRepository.findTopFeedbackTypes(condition, period, TOP_FEEDBACK_TYPE_LIMIT);
+
+        List<TaskTypeStatsItem> items = byTaskType.entrySet().stream()
+                .map(entry -> TaskTypeStatsItem.of(
+                        entry.getKey(),
+                        entry.getValue(),
+                        topFeedbackTypes.getOrDefault(entry.getKey().id(), List.of())))
+                .sorted(TaskTypeStatsItem.REWORK_RATE_DESC)
+                .toList();
+        return new TaskTypeStatsResponse(items);
     }
 
     /** 팀이 없으면 404 TEAM_NOT_FOUND, 팀 멤버가 아니면 403 NOT_A_MEMBER */
