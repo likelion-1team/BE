@@ -122,6 +122,18 @@ public class Conversation {
 		}
 	}
 
+	public void recordAnalysis(String model, int turnCount, int estimatedTokens, BigDecimal estimatedCost,
+		boolean success, boolean rework, int reviewTimeSec, int reworkTimeSec) {
+		this.model = model;
+		this.turnCount = turnCount;
+		this.estimatedTokens = estimatedTokens;
+		this.estimatedCost = estimatedCost;
+		this.isSuccess = success;
+		this.hasRework = rework;
+		this.reviewTimeSec = reviewTimeSec;
+		this.reworkTimeSec = reworkTimeSec;
+	}
+
 	public boolean isOwnedBy(Long userId) {
 		return user.getId().equals(userId);
 	}

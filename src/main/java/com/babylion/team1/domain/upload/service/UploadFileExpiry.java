@@ -1,5 +1,6 @@
 package com.babylion.team1.domain.upload.service;
 
+import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.upload.entity.UploadStatus;
 import com.babylion.team1.domain.upload.repository.UploadRepository;
 import java.io.IOException;
@@ -43,15 +44,15 @@ class UploadFileExpiry {
             return;
         }
         Instant staleFileBefore = Instant.now().minus(RETENTION);
-        LocalDateTime uploadedBefore = LocalDateTime.now().minus(RETENTION);
+        LocalDateTime now = LocalDateTime.now();
         try (var files = Files.list(directory)) {
-            files.forEach(path -> expireFile(path, staleFileBefore, uploadedBefore));
+            files.forEach(path -> expireFile(path, staleFileBefore, now));
         } catch (IOException e) {
             log.warn("임시 업로드 디렉터리를 읽을 수 없습니다.", e);
         }
     }
 
-    private void expireFile(Path path, Instant staleFileBefore, LocalDateTime uploadedBefore) {
+    private void expireFile(Path path, Instant staleFileBefore, LocalDateTime now) {
         String name = path.getFileName().toString();
         try {
             if (!Files.isRegularFile(path) || Files.getLastModifiedTime(path).toInstant().isAfter(staleFileBefore)) {
@@ -67,16 +68,30 @@ class UploadFileExpiry {
                 transaction.executeWithoutResult(status -> {
                     // 분석 시작도 같은 행 잠금으로 상태를 확인한 뒤 파일을 사용한다.
                     boolean expired = uploadRepository.findByIdForUpdate(uploadId)
-                            .map(upload -> upload.getStatus() == UploadStatus.UPLOADED
-                                    && !upload.getUploadedAt().isAfter(uploadedBefore))
+                            .map(upload -> upload.getStatus() == UploadStatus.DONE || isExpired(upload, path, now))
                             .orElse(true);
                     if (expired) {
-                        storage.delete(path);
+                        storage.deleteUpload(uploadId);
                     }
                 });
             }
         } catch (IOException | RuntimeException e) {
             log.warn("임시 업로드 만료 처리 실패: {}", name, e);
+        }
+    }
+
+    static boolean isExpired(Upload upload, Path path, LocalDateTime now) {
+        if (upload.getStatus() == UploadStatus.UPLOADED) {
+            return !upload.getUploadedAt().isAfter(now.minus(RETENTION));
+        }
+        if (upload.getStatus() != UploadStatus.FAILED) {
+            return false;
+        }
+        try {
+            return !Files.getLastModifiedTime(path).toInstant().isAfter(Instant.now().minus(RETENTION));
+        } catch (IOException e) {
+            log.warn("실패한 업로드의 보관 기한을 확인할 수 없습니다: {}", upload.getId());
+            return false;
         }
     }
 }

@@ -18,6 +18,11 @@ import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import java.util.zip.CRC32;
 import java.util.zip.CheckedInputStream;
 import java.util.zip.ZipEntry;
@@ -39,6 +44,7 @@ class ChatGptExportReader {
     private static final BigDecimal ONE_NANOSECOND = BigDecimal.valueOf(1, 9);
 
     private final JsonFactory jsonFactory = new JsonFactory();
+    private final ObjectMapper mapper = new ObjectMapper();
     private final long maxExpandedBytes;
 
     ChatGptExportReader(@Value("${app.upload.max-expanded-size}") DataSize maxExpandedSize) {
@@ -46,12 +52,44 @@ class ChatGptExportReader {
     }
 
     List<ExportConversation> read(Path file, boolean zipped, LocalDate from, LocalDate to) {
+        return readFile(file, zipped, input -> readJson(input, from, to));
+    }
+
+    Map<String, JsonNode> readSelected(Path file, boolean zipped, Set<String> selectedIds) {
+        return readFile(file, zipped, input -> {
+            Map<String, JsonNode> selected = new LinkedHashMap<>();
+            try (JsonParser parser = mapper.createParser(input)) {
+                if (parser.nextToken() != START_ARRAY) {
+                    throw invalidFormat();
+                }
+                while (parser.nextToken() != END_ARRAY) {
+                    if (!parser.hasToken(START_OBJECT)) {
+                        throw invalidFormat();
+                    }
+                    JsonNode conversation = mapper.reader().without(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                            .readTree(parser);
+                    JsonNode id = conversation.path("id");
+                    String externalId = id.isNull() || id.isMissingNode()
+                            ? conversation.path("conversation_id").asString() : id.asString();
+                    if (selectedIds.contains(externalId)) {
+                        selected.putIfAbsent(externalId, conversation);
+                    }
+                }
+                if (parser.nextToken() != null) {
+                    throw invalidFormat();
+                }
+            }
+            return selected;
+        });
+    }
+
+    private <T> T readFile(Path file, boolean zipped, Function<InputStream, T> read) {
         try {
             if (zipped) {
-                return readZip(file, from, to);
+                return readZip(file, read);
             }
             try (InputStream input = Files.newInputStream(file)) {
-                return readJson(input, from, to);
+                return read.apply(input);
             }
         } catch (JacksonException | IOException e) {
             // 파서 예외 메시지에 포함될 수 있는 대화 원문을 응답이나 로그에 남기지 않는다.
@@ -59,7 +97,7 @@ class ChatGptExportReader {
         }
     }
 
-    private List<ExportConversation> readZip(Path file, LocalDate from, LocalDate to) throws IOException {
+    private <T> T readZip(Path file, Function<InputStream, T> read) throws IOException {
         try (ZipFile archive = new ZipFile(file.toFile())) {
             List<? extends ZipEntry> entries = archive.stream()
                     .filter(entry -> !entry.isDirectory())
@@ -76,7 +114,7 @@ class ChatGptExportReader {
             }
             try (CheckedInputStream input = new CheckedInputStream(
                     new LimitedInputStream(archive.getInputStream(entry), maxExpandedBytes), new CRC32())) {
-                List<ExportConversation> conversations = readJson(input, from, to);
+                T conversations = read.apply(input);
                 if (input.getChecksum().getValue() != entry.getCrc()) {
                     throw invalidFormat();
                 }

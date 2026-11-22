@@ -2,6 +2,7 @@ package com.babylion.team1.domain.upload.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -26,6 +27,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.transaction.TestTransaction;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -111,6 +114,96 @@ class UploadControllerIntegrationTest {
         assertThat(jdbc.queryForObject(
                 "select count(*) from conversations where upload_id = ?", Long.class, uploadId)).isZero();
         assertThat(Files.readString(uploadDirectory.resolve(uploadId + ".export"))).isEqualTo(original);
+    }
+
+    @Test
+    void analyzesUploadedConversationAndCommitsDone() throws Exception {
+        User uploader = User.builder().name("분석 테스트").email("analysis-it-" + UUID.randomUUID() + "@test.com")
+                .passwordHash("test-password-hash").build();
+        entityManager.persist(uploader);
+        Team team = saveTeam(uploader, "분석 테스트 팀");
+        var settings = TeamSettings.createDefault(team);
+        settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        entityManager.persist(settings);
+        var type = TeamTaskType.builder().team(team).name("보고서").successDefinition("제출").build();
+        entityManager.persist(type);
+        entityManager.flush();
+
+        long userId = uploader.getId();
+        long teamId = team.getId();
+        long typeId = type.getId();
+        long epoch = TARGET_DATE.atTime(10, 0).atZone(ZoneId.of("Asia/Seoul")).toEpochSecond();
+        String externalId = UUID.randomUUID().toString();
+        String export = """
+                [{"id":"%s","title":"테스트","create_time":%d,"current_node":"answer","mapping":{
+                  "question":{"parent":null,"children":["answer"],"message":{
+                    "author":{"role":"user"},"content":{"parts":["hello"]},"create_time":%d}},
+                  "answer":{"parent":"question","children":[],"message":{
+                    "author":{"role":"assistant"},"content":{"parts":["world"]},"create_time":%d}}
+                }}]
+                """.formatted(externalId, epoch, epoch, epoch + 1);
+        String bearer = "Bearer " + jwtProvider.createAccessToken(userId);
+        TestTransaction.flagForCommit();
+        TestTransaction.end();
+
+        try {
+            mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+                            .file(new MockMultipartFile("file", "conversations.json", "application/json",
+                                    export.getBytes(StandardCharsets.UTF_8)))
+                            .header(HttpHeaders.AUTHORIZATION, bearer))
+                    .andExpect(status().isCreated());
+            Long uploadId = jdbc.queryForObject("select id from uploads where team_id = ?", Long.class, teamId);
+
+            mockMvc.perform(post("/api/v1/uploads/{uploadId}/analyses", uploadId)
+                            .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
+                            .content("""
+                                    {"selections":[{"externalId":"%s","taskTypeId":%d}]}
+                                    """.formatted(externalId, typeId)))
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.data.status").value("ANALYZING"));
+
+            long deadline = System.nanoTime() + java.time.Duration.ofSeconds(15).toNanos();
+            Path original = uploadDirectory.resolve(uploadId + ".export");
+            String state;
+            do {
+                state = jdbc.queryForObject("select status from uploads where id = ?", String.class, uploadId);
+                if ("FAILED".equals(state) || ("DONE".equals(state) && Files.notExists(original))) {
+                    break;
+                }
+                Thread.sleep(50);
+            } while (System.nanoTime() < deadline);
+
+            assertThat(state).as("fail_reason=%s", jdbc.queryForObject(
+                    "select fail_reason from uploads where id = ?", String.class, uploadId)).isEqualTo("DONE");
+            assertThat(original).doesNotExist();
+            assertThat(jdbc.queryForObject("select progress from uploads where id = ?", Integer.class, uploadId))
+                    .isEqualTo(100);
+            assertThat(jdbc.queryForObject("select count(*) from uploads where id = ? and analyzed_at is not null",
+                    Long.class, uploadId)).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("select estimated_tokens from conversations where upload_id = ?",
+                    Integer.class, uploadId)).isEqualTo(2);
+            assertThat(jdbc.queryForList("""
+                    select m.content from messages m join conversations c on c.id = m.conversation_id
+                    where c.upload_id = ? order by m.idx
+                    """, String.class, uploadId)).containsExactly("hello", "world");
+            mockMvc.perform(post("/api/v1/uploads/{uploadId}/analyses", uploadId)
+                            .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
+                            .content("""
+                                    {"selections":[{"externalId":"%s","taskTypeId":%d}]}
+                                    """.formatted(externalId, typeId)))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("ANALYSIS_ALREADY_COMPLETED"));
+        } finally {
+            jdbc.update("delete from messages where conversation_id in (select id from conversations where team_id = ?)",
+                    teamId);
+            jdbc.update("delete from conversations where team_id = ?", teamId);
+            jdbc.update("delete from uploads where team_id = ?", teamId);
+            jdbc.update("delete from team_task_types where team_id = ?", teamId);
+            jdbc.update("delete from team_settings where team_id = ?", teamId);
+            jdbc.update("delete from team_members where team_id = ?", teamId);
+            jdbc.update("delete from teams where id = ?", teamId);
+            jdbc.update("delete from users where id = ?", userId);
+        }
     }
 
     private Team saveTeam(User uploader, String name) {
