@@ -9,6 +9,7 @@ import org.springframework.format.annotation.DateTimeFormat;
  * 비용 구조 조회 조건. groupBy만 필수다(없으면 서비스에서 400 INVALID_REQUEST).
  * 나머지는 추이 API와 같다. from·to를 비우면 team_settings의 대상 기간을 쓴다(양 끝 포함, KST).
  * groupBy·날짜·unit·taskTypes 형식이 잘못되면 바인딩 단계에서 400 INVALID_REQUEST로 응답한다.
+ * scope는 집계 범위(ME·TEAM)다. 생략하면 팀장은 TEAM, 팀원은 ME. 팀원이 TEAM을 보내면 403 LEADER_ONLY.
  */
 public record CostBreakdownRequest(
         @Schema(requiredMode = Schema.RequiredMode.REQUIRED)
@@ -17,7 +18,8 @@ public record CostBreakdownRequest(
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
         KpiUnit unit,
         List<Long> taskTypes,
-        List<String> models
+        List<String> models,
+        DashboardScope scope
 ) {
 
     public CostBreakdownRequest {
