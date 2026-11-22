@@ -5,6 +5,7 @@ import com.babylion.team1.domain.dashboard.dto.CostRow;
 import com.babylion.team1.domain.dashboard.dto.CostType;
 import com.babylion.team1.domain.dashboard.dto.request.CostBreakdownRequest;
 import com.babylion.team1.domain.dashboard.dto.request.CostGroupBy;
+import com.babylion.team1.domain.dashboard.dto.request.DashboardScope;
 import com.babylion.team1.domain.dashboard.dto.response.CostBreakdownResponse;
 import com.babylion.team1.domain.dashboard.dto.response.CostItem;
 import com.babylion.team1.domain.dashboard.dto.response.CostPoint;
@@ -69,18 +70,20 @@ public class DashboardService {
     private final DashboardQueryRepository dashboardQueryRepository;
 
     /**
-     * 팀원이면 본인 지표, 팀장이면 팀 전체 집계를 돌려준다. coverage는 팀장에게만 채운다.
-     * 팀이 없으면 404 TEAM_NOT_FOUND, 팀 멤버가 아니면 403 NOT_A_MEMBER.
+     * scope에 따라 본인 지표(ME) 또는 팀 전체 집계(TEAM)를 돌려준다. 생략하면 팀장은 TEAM, 팀원은 ME.
+     * coverage는 팀 집계일 때만 채운다.
+     * 팀이 없으면 404 TEAM_NOT_FOUND, 팀 멤버가 아니면 403 NOT_A_MEMBER, 팀원이 TEAM을 요청하면 403 LEADER_ONLY.
      */
     public KpiResponse getKpis(Long teamId, Long userId, KpiRequest request) {
         TeamMember member = getMember(teamId, userId);
+        Long scopeUserId = resolveScopeUserId(member, userId, request.scope());
         Optional<TeamSettings> settings = teamSettingsRepository.findByTeamId(teamId);
 
         DatePeriod period = resolvePeriod(request.from(), request.to(), settings);
         DatePeriod prevPeriod = period.previous();
         KpiCondition condition = new KpiCondition(
                 teamId,
-                member.isLeader() ? null : userId,
+                scopeUserId,
                 request.taskTypes(),
                 request.models());
 
@@ -91,7 +94,7 @@ public class DashboardService {
         int hourlyLaborCost = settings.map(TeamSettings::getHourlyLaborCost)
                 .orElse(TeamSettings.DEFAULT_HOURLY_LABOR_COST);
 
-        CoverageResponse coverage = member.isLeader()
+        CoverageResponse coverage = scopeUserId == null
                 ? CoverageResponse.of(
                         current.submittedMemberCount(),
                         teamMemberRepository.countByTeamId(teamId),
@@ -113,12 +116,13 @@ public class DashboardService {
     }
 
     /**
-     * 온보딩 시작일 전/후의 핵심 지표 3개를 비교한다. 팀원이면 본인 값, 팀장이면 팀 집계.
+     * 온보딩 시작일 전/후의 핵심 지표 3개를 비교한다. 집계 범위는 scope를 따른다(getKpis 참고).
      * 전: 대상 기간 시작일 ~ 온보딩 시작일 전날 / 후: 온보딩 시작일 ~ 대상 기간 종료일.
      * 온보딩 시작일이나 대상 기간이 없으면 before·after를 null로 돌려준다(화면에서 비교 카드 숨김).
      */
     public OnboardingEffectResponse getOnboardingEffect(Long teamId, Long userId, OnboardingEffectRequest request) {
         TeamMember member = getMember(teamId, userId);
+        Long scopeUserId = resolveScopeUserId(member, userId, request.scope());
         Optional<TeamSettings> settings = teamSettingsRepository.findByTeamId(teamId);
         LocalDate onboardingStartDate = settings.map(TeamSettings::getOnboardingStartDate).orElse(null);
         if (onboardingStartDate == null || !settings.get().isTargetSet()) {
@@ -128,7 +132,7 @@ public class DashboardService {
         TeamSettings teamSettings = settings.get();
         KpiCondition condition = new KpiCondition(
                 teamId,
-                member.isLeader() ? null : userId,
+                scopeUserId,
                 request.taskTypes(),
                 List.of());
         CoreMetrics before = aggregateCoreMetrics(condition, teamSettings.getTargetFrom(), onboardingStartDate.minusDays(1));
@@ -137,19 +141,20 @@ public class DashboardService {
     }
 
     /**
-     * 선택한 지표의 날짜별(DAY) 또는 주별(WEEK, 월요일 시작) 추이. 팀원이면 본인 값, 팀장이면 팀 집계.
+     * 선택한 지표의 날짜별(DAY) 또는 주별(WEEK, 월요일 시작) 추이. 집계 범위는 scope를 따른다(getKpis 참고).
      * 대화가 없는 날(주)도 빠짐없이 채워 날짜 오름차순으로 돌려준다.
      * 표본 부족: 대화 수 < 하루 최소 대화 수 x 그 점에 포함된 일수(DAY면 1일, WEEK면 조회 기간 안에 든 일수).
      */
     public TrendResponse getTrends(Long teamId, Long userId, TrendRequest request) {
         TrendMetric metric = TrendMetric.from(request.metric());
         TeamMember member = getMember(teamId, userId);
+        Long scopeUserId = resolveScopeUserId(member, userId, request.scope());
         Optional<TeamSettings> settings = teamSettingsRepository.findByTeamId(teamId);
 
         DatePeriod period = resolvePeriod(request.from(), request.to(), settings);
         KpiCondition condition = new KpiCondition(
                 teamId,
-                member.isLeader() ? null : userId,
+                scopeUserId,
                 request.taskTypes(),
                 request.models());
         Map<LocalDate, ConversationAggregate> daily = dashboardQueryRepository.aggregateConversationsByDate(condition, period);
@@ -185,7 +190,7 @@ public class DashboardService {
     }
 
     /**
-     * 기간별 비용 구조(누적 막대 차트용). 팀원이면 본인 값, 팀장이면 팀 집계.
+     * 기간별 비용 구조(누적 막대 차트용). 집계 범위는 scope를 따른다(getKpis 참고).
      * COST_TYPE은 호출비·검토비·수습비로 나누고, MODEL·TASK_TYPE은 대화별 총비용(호출+검토+수습)을 키별로 합산한다.
      * 비용은 반올림 전 정밀도로 합산한 뒤 점·키마다 원 단위로 반올림한다. 대화가 없는 날(주)도 채워 날짜 오름차순.
      */
@@ -195,12 +200,13 @@ public class DashboardService {
         }
         CostGroupBy groupBy = request.groupBy();
         TeamMember member = getMember(teamId, userId);
+        Long scopeUserId = resolveScopeUserId(member, userId, request.scope());
         Optional<TeamSettings> settings = teamSettingsRepository.findByTeamId(teamId);
 
         DatePeriod period = resolvePeriod(request.from(), request.to(), settings);
         KpiCondition condition = new KpiCondition(
                 teamId,
-                member.isLeader() ? null : userId,
+                scopeUserId,
                 request.taskTypes(),
                 request.models());
         int hourlyLaborCost = settings.map(TeamSettings::getHourlyLaborCost)
@@ -341,6 +347,23 @@ public class DashboardService {
         } catch (DateTimeParseException e) {
             throw new CustomException(ErrorCode.INVALID_REQUEST, "날짜는 yyyy-MM-dd 형식이어야 합니다.");
         }
+    }
+
+    /**
+     * 집계 대상 userId. 팀 전체 집계면 null, 본인 집계면 요청자 userId.
+     * scope를 생략하면 팀장은 TEAM, 팀원은 ME로 본다. 팀원이 TEAM을 요청하면 403 LEADER_ONLY.
+     */
+    private Long resolveScopeUserId(TeamMember member, Long userId, DashboardScope scope) {
+        DashboardScope resolved = scope != null
+                ? scope
+                : (member.isLeader() ? DashboardScope.TEAM : DashboardScope.ME);
+        if (resolved == DashboardScope.ME) {
+            return userId;
+        }
+        if (!member.isLeader()) {
+            throw new CustomException(ErrorCode.LEADER_ONLY);
+        }
+        return null;
     }
 
     /** 팀이 없으면 404 TEAM_NOT_FOUND, 팀 멤버가 아니면 403 NOT_A_MEMBER */
