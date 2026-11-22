@@ -1,5 +1,9 @@
 package com.babylion.team1.domain.team.service;
 
+import com.babylion.team1.domain.feedback.dto.response.GuidesResponse;
+import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
+import com.babylion.team1.domain.feedback.entity.FeedbackType;
+import com.babylion.team1.domain.feedback.repository.FeedbackRepository;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
 import com.babylion.team1.domain.team.dto.request.TeamSettingsUpdateRequest;
@@ -40,6 +44,7 @@ public class TeamService {
     private final TeamMemberRepository teamMemberRepository;
     private final TeamSettingsRepository teamSettingsRepository;
     private final TeamTaskTypeRepository teamTaskTypeRepository;
+    private final FeedbackRepository feedbackRepository;
 
     @Transactional
     public TeamCreateResponse createTeam(Long userId, TeamCreateRequest request) {
@@ -85,6 +90,21 @@ public class TeamService {
         findTeam(teamId);
         requireTeamLeader(teamId, userId);
         return teamMemberRepository.findTeamMembersWithSubmission(teamId);
+    }
+
+    @Transactional(readOnly = true)
+    public SharedCasesResponse getSharedCases(Long teamId, Long userId, Long taskTypeId, String type) {
+        findTeam(teamId);
+        requireTeamLeader(teamId, userId);
+        return SharedCasesResponse.from(feedbackRepository.findSharedCases(
+                teamId, taskTypeId, type, FeedbackType.alternateValue(type)));
+    }
+
+    @Transactional(readOnly = true)
+    public GuidesResponse getGuides(Long teamId, Long userId, String type) {
+        findTeam(teamId);
+        requireTeamMember(teamId, userId);
+        return GuidesResponse.from(feedbackRepository.findGuides(teamId, type, FeedbackType.alternateValue(type)));
     }
 
     @Transactional(readOnly = true)
