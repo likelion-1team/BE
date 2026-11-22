@@ -97,6 +97,11 @@ public class Upload {
 		this.progress = Math.max(0, Math.min(100, progress));
 	}
 
+	public void complete(int skippedDuplicateCount) {
+		this.duplicateCount = skippedDuplicateCount;
+		complete();
+	}
+
 	public void complete() {
 		this.status = UploadStatus.DONE;
 		this.progress = 100;

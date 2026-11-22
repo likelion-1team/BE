@@ -60,4 +60,7 @@ public class Message {
 		}
 		this.createdAt = createdAt;
 	}
+	public void markRework(boolean rework) {
+		this.isRework = rework;
+	}
 }

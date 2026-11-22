@@ -21,6 +21,8 @@ public enum ErrorCode {
     RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "요청한 경로를 찾을 수 없습니다."),
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED", "지원하지 않는 HTTP 메서드입니다."),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE", "지원하지 않는 Content-Type입니다."),
+    ANALYSIS_ALREADY_COMPLETED(HttpStatus.CONFLICT, "ANALYSIS_ALREADY_COMPLETED", "이미 분석이 완료되었습니다."),
+    UPLOAD_EXPIRED(HttpStatus.GONE, "UPLOAD_EXPIRED", "분석할 원본 파일의 보관 기간이 만료되었습니다."),
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_SERVER_ERROR", "서버 내부 오류가 발생했습니다."),
 
     // Auth
@@ -44,6 +46,13 @@ public enum ErrorCode {
     // Upload
     INVALID_FILE_FORMAT(HttpStatus.BAD_REQUEST, "INVALID_FILE_FORMAT", "ChatGPT 내보내기 파일 형식을 확인해 주세요."),
     FILE_TOO_LARGE(HttpStatus.CONTENT_TOO_LARGE, "FILE_TOO_LARGE", "파일이 허용 용량을 초과했습니다."),
+
+    // Analysis
+    NO_CONVERSATION_SELECTED(HttpStatus.BAD_REQUEST, "NO_CONVERSATION_SELECTED", "분석할 대화를 선택해 주세요."),
+    TASK_TYPE_NOT_ALLOWED(HttpStatus.BAD_REQUEST, "TASK_TYPE_NOT_ALLOWED", "팀에서 허용하지 않는 업무 유형입니다."),
+    NOT_UPLOADER(HttpStatus.FORBIDDEN, "NOT_UPLOADER", "파일을 올린 본인만 분석할 수 있습니다."),
+    UPLOAD_NOT_FOUND(HttpStatus.NOT_FOUND, "UPLOAD_NOT_FOUND", "업로드를 찾을 수 없습니다."),
+    ANALYSIS_IN_PROGRESS(HttpStatus.CONFLICT, "ANALYSIS_IN_PROGRESS", "이미 분석 중입니다."),
 
     // Feedback
     FEEDBACK_NOT_SHARED(HttpStatus.BAD_REQUEST, "FEEDBACK_NOT_SHARED", "공유가 허용된 사례만 가이드로 지정할 수 있습니다.");

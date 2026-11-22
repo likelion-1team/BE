@@ -62,15 +62,17 @@ public class UploadService {
                     .duplicateCount(duplicates.size())
                     .build());
             Long uploadId = upload.getId();
-            storage.store(staged, uploadId);
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCompletion(int status) {
                     if (status == STATUS_ROLLED_BACK) {
-                        storage.delete(storage.pathFor(uploadId));
+                        storage.deleteUpload(uploadId);
                     }
                 }
             });
+            storage.store(staged, uploadId);
+            storage.writeTargetPeriod(uploadId,
+                    new UploadFileStorage.TargetPeriod(settings.getTargetFrom(), settings.getTargetTo()));
             return new UploadResponse(uploadId, candidates);
         } finally {
             storage.delete(staged);
