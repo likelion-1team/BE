@@ -2,9 +2,12 @@ package com.babylion.team1.domain.team.controller;
 
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
+import com.babylion.team1.domain.team.dto.request.TeamSettingsUpdateRequest;
 import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
 import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
+import com.babylion.team1.domain.team.dto.response.TeamSettingsResponse;
+import com.babylion.team1.domain.team.dto.response.TeamSettingsUpdateResponse;
 import com.babylion.team1.domain.team.service.TeamService;
 import com.babylion.team1.global.response.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -16,6 +19,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -51,5 +55,22 @@ public class TeamController {
             @AuthenticationPrincipal Long userId,
             @Valid @RequestBody TeamMemberAddRequest request) {
         return ApiResponse.success("S201", "팀원 추가 성공", teamService.addMember(teamId, userId, request));
+    }
+
+    @Operation(summary = "분석 대상·평가 기준 조회")
+    @GetMapping("/{teamId}/settings")
+    public ApiResponse<TeamSettingsResponse> getSettings(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getSettings(teamId, userId));
+    }
+
+    @Operation(summary = "분석 대상 설정")
+    @PutMapping("/{teamId}/settings")
+    public ApiResponse<TeamSettingsUpdateResponse> updateSettings(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId,
+            @Valid @RequestBody TeamSettingsUpdateRequest request) {
+        return ApiResponse.success("S200", "설정 저장 성공", teamService.updateSettings(teamId, userId, request));
     }
 }
