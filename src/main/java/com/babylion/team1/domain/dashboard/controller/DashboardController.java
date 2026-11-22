@@ -4,6 +4,7 @@ import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
 import com.babylion.team1.domain.dashboard.dto.request.OnboardingEffectRequest;
 import com.babylion.team1.domain.dashboard.dto.request.TrendRequest;
 import com.babylion.team1.domain.dashboard.dto.response.TrendResponse;
+import com.babylion.team1.domain.dashboard.dto.response.FilterOptionsResponse;
 import com.babylion.team1.domain.dashboard.dto.response.KpiResponse;
 import com.babylion.team1.domain.dashboard.dto.response.OnboardingEffectResponse;
 import com.babylion.team1.domain.dashboard.service.DashboardService;
@@ -20,16 +21,25 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequiredArgsConstructor
-@RequestMapping("/api/v1/teams/{teamId}/dashboard")
+@RequestMapping("/api/v1/teams/{teamId}")
 public class DashboardController {
 
     private final DashboardService dashboardService;
+
+    /** 대시보드 진입 시 필터 목록 준비. 명세상 경로가 /dashboard 밖이라 기본 경로를 /teams/{teamId}로 둔다. */
+    @GetMapping("/filter-options")
+    public ResponseEntity<ApiResponse<FilterOptionsResponse>> getFilterOptions(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId) {
+        FilterOptionsResponse response = dashboardService.getFilterOptions(teamId, userId);
+        return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
+    }
 
     /**
      * principal은 JwtAuthenticationFilter가 넣어 둔 userId(Long)이다.
      * @ParameterObject: Swagger에서 request를 JSON 하나가 아니라 from·to·unit·taskTypes·models 개별 쿼리 파라미터로 보여준다.
      */
-    @GetMapping("/kpis")
+    @GetMapping("/dashboard/kpis")
     public ResponseEntity<ApiResponse<KpiResponse>> getKpis(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
@@ -38,7 +48,7 @@ public class DashboardController {
         return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
     }
 
-    @GetMapping("/trends")
+    @GetMapping("/dashboard/trends")
     public ResponseEntity<ApiResponse<TrendResponse>> getTrends(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
@@ -47,7 +57,7 @@ public class DashboardController {
         return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
     }
 
-    @GetMapping("/onboarding-effect")
+    @GetMapping("/dashboard/onboarding-effect")
     public ResponseEntity<ApiResponse<OnboardingEffectResponse>> getOnboardingEffect(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,

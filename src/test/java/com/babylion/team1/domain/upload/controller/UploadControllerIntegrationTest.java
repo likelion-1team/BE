@@ -1,6 +1,8 @@
 package com.babylion.team1.domain.upload.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -117,6 +119,58 @@ class UploadControllerIntegrationTest {
     }
 
     @Test
+    void returnsStoredProgressAndFailureOnlyToUploader() throws Exception {
+        User uploader = User.builder().name("업로더").email("status-" + UUID.randomUUID() + "@test.com")
+                .passwordHash("test-password-hash").build();
+        User other = User.builder().name("다른 사용자").email("other-" + UUID.randomUUID() + "@test.com")
+                .passwordHash("test-password-hash").build();
+        entityManager.persist(uploader);
+        entityManager.persist(other);
+        Team team = saveTeam(uploader, "상태 조회 테스트 팀");
+        Upload upload = Upload.builder().team(team).uploader(uploader).fileName("conversations.json")
+                .conversationCount(3).duplicateCount(2).build();
+        entityManager.persist(upload);
+
+        String path = "/api/v1/uploads/{uploadId}";
+        String bearer = "Bearer " + jwtProvider.createAccessToken(uploader.getId());
+
+        mockMvc.perform(get(path, upload.getId()))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION,
+                        "Bearer " + jwtProvider.createAccessToken(other.getId())))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("NOT_UPLOADER"));
+        mockMvc.perform(get(path, Long.MAX_VALUE).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("UPLOAD_NOT_FOUND"));
+        mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.data.status").value("UPLOADED"))
+                .andExpect(jsonPath("$.data.progress").value(0))
+                .andExpect(jsonPath("$.data.failReason").value(nullValue()))
+                .andExpect(jsonPath("$.data.savedCount").doesNotHaveJsonPath());
+
+        upload.startAnalysis(1);
+        upload.updateProgress(60);
+        mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("ANALYZING"))
+                .andExpect(jsonPath("$.data.progress").value(60))
+                .andExpect(jsonPath("$.data.failReason").value(nullValue()))
+                .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
+
+        upload.fail("분석 실패");
+        mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("FAILED"))
+                .andExpect(jsonPath("$.data.progress").value(60))
+                .andExpect(jsonPath("$.data.failReason").value("분석 실패"))
+                .andExpect(jsonPath("$.data.savedCount").doesNotHaveJsonPath())
+                .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
+    }
+
+    @Test
     void analyzesUploadedConversationAndCommitsDone() throws Exception {
         User uploader = User.builder().name("분석 테스트").email("analysis-it-" + UUID.randomUUID() + "@test.com")
                 .passwordHash("test-password-hash").build();
@@ -176,6 +230,14 @@ class UploadControllerIntegrationTest {
             assertThat(state).as("fail_reason=%s", jdbc.queryForObject(
                     "select fail_reason from uploads where id = ?", String.class, uploadId)).isEqualTo("DONE");
             assertThat(original).doesNotExist();
+            mockMvc.perform(get("/api/v1/uploads/{uploadId}", uploadId)
+                            .header(HttpHeaders.AUTHORIZATION, bearer))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.status").value("DONE"))
+                    .andExpect(jsonPath("$.data.progress").value(100))
+                    .andExpect(jsonPath("$.data.failReason").value(nullValue()))
+                    .andExpect(jsonPath("$.data.savedCount").value(1))
+                    .andExpect(jsonPath("$.data.skippedDuplicateCount").value(0));
             assertThat(jdbc.queryForObject("select progress from uploads where id = ?", Integer.class, uploadId))
                     .isEqualTo(100);
             assertThat(jdbc.queryForObject("select count(*) from uploads where id = ? and analyzed_at is not null",
