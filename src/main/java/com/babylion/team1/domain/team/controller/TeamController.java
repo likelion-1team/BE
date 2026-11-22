@@ -1,6 +1,8 @@
 package com.babylion.team1.domain.team.controller;
 
+import com.babylion.team1.domain.feedback.dto.request.MyFeedbackSort;
 import com.babylion.team1.domain.feedback.dto.response.GuidesResponse;
+import com.babylion.team1.domain.feedback.dto.response.MyFeedbackListResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
@@ -15,8 +17,10 @@ import com.babylion.team1.domain.team.service.TeamService;
 import com.babylion.team1.global.response.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
+import java.time.LocalDate;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -67,6 +71,21 @@ public class TeamController {
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId) {
         return ApiResponse.success("S200", "조회 성공", teamService.getTeamMembers(teamId, userId));
+    }
+
+    @Operation(summary = "내 피드백 목록 조회",
+            description = "날짜 그룹은 최신순으로 한 페이지에 20개씩 반환합니다. sort는 각 그룹 안에 적용합니다.")
+    @GetMapping("/{teamId}/feedbacks")
+    public ApiResponse<MyFeedbackListResponse> getMyFeedbacks(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) List<String> types,
+            @RequestParam(defaultValue = "LATEST") MyFeedbackSort sort,
+            @RequestParam(defaultValue = "0") int page) {
+        return ApiResponse.success("S200", "조회 성공",
+                teamService.getMyFeedbacks(teamId, userId, from, to, types, sort, page));
     }
 
     @Operation(summary = "공유 사례 목록 조회")

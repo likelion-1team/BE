@@ -11,6 +11,8 @@ import com.babylion.team1.domain.conversation.entity.Message;
 import com.babylion.team1.domain.conversation.entity.MessageRole;
 import com.babylion.team1.domain.feedback.entity.Feedback;
 import com.babylion.team1.domain.feedback.entity.FeedbackEvidence;
+import com.babylion.team1.domain.feedback.entity.FeedbackReaction;
+import com.babylion.team1.domain.feedback.entity.ReactionType;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
@@ -19,6 +21,7 @@ import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.global.jwt.JwtProvider;
 import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -42,6 +45,7 @@ import org.springframework.transaction.annotation.Transactional;
 class SharedFeedbackControllerIntegrationTest {
 
     private static final String SHARED_CASES = "/api/v1/teams/{teamId}/shared-cases";
+    private static final String MY_FEEDBACKS = "/api/v1/teams/{teamId}/feedbacks";
     private static final String GUIDES = "/api/v1/teams/{teamId}/guides";
     private static final String MISSING_CONTEXT = "MISSING_CONTEXT";
     private static final String MISSING_CONTEXT_LABEL = "맥락 누락";
@@ -219,6 +223,89 @@ class SharedFeedbackControllerIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/teams/{teamId}/guides'].get.responses['200']").exists());
     }
 
+    @Test
+    void myFeedbacksReturnOnlyOwnedRowsInTheTargetTeamWithTheCallersReaction() throws Exception {
+        TeamFixture fixture = saveTeam();
+        TeamFixture other = saveTeam();
+        Feedback own = saveFeedback(fixture.taskType(), fixture.leader(), MISSING_CONTEXT, "팀장 본인", null);
+        Feedback member = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "팀원 본인", null);
+        saveFeedback(other.taskType(), fixture.leader(), MISSING_CONTEXT, "다른 팀 피드백", null);
+        own.share();
+        entityManager.persist(FeedbackReaction.builder().feedback(own).user(fixture.leader())
+                .reaction(ReactionType.HELPFUL).build());
+        entityManager.persist(FeedbackReaction.builder().feedback(member).user(fixture.leader())
+                .reaction(ReactionType.HELPFUL).build());
+        entityManager.flush();
+
+        Long teamId = fixture.team().getId();
+        request(MY_FEEDBACKS, teamId, fixture.leader())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.message").value("조회 성공"))
+                .andExpect(jsonPath("$.data.days.length()").value(1))
+                .andExpect(jsonPath("$.data.days[0].date").value(DATE.toString()))
+                .andExpect(jsonPath("$.data.days[0].feedbacks.length()").value(1))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].feedbackId").value(own.getId()))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].expectedSaving.tokens").value(300))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].expectedSaving.cost").value(180.5))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].expectedSaving.turns").value(2))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].isShared").value(true))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].myReaction").value("HELPFUL"));
+        request(MY_FEEDBACKS, teamId, fixture.member())
+                .andExpect(jsonPath("$.data.days[0].feedbacks.length()").value(1))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].feedbackId").value(member.getId()))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].myReaction").value(nullValue()));
+        request(MY_FEEDBACKS, teamId, other.leader())
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+        mockMvc.perform(get(MY_FEEDBACKS, teamId)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void myFeedbacksApplyInclusiveDatesAndTypesBeforePagingAndSortWithinEachDay() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Feedback saving = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT,
+                "절감 우선", null, DATE, 1, 1000);
+        Feedback frequency = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT_LABEL,
+                "빈도 우선", null, DATE, 5, 10);
+        saveFeedback(fixture.taskType(), fixture.member(), "OVERSPEC_MODEL",
+                "필터 제외", null, DATE, 100, 10000);
+        Feedback older = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION,
+                "전날", null, DATE.minusDays(1), 1, 10000);
+        for (int day = 2; day <= 20; day++) {
+            saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT,
+                    "이전 피드백", null, DATE.minusDays(day), 1, 1);
+        }
+        entityManager.flush();
+
+        Long teamId = fixture.team().getId();
+        User member = fixture.member();
+        request(MY_FEEDBACKS, teamId, member, "from", DATE.minusDays(1).toString(), "to", DATE.toString(),
+                "types", "맥락 누락,LONG_CONVERSATION", "sort", "SAVING")
+                .andExpect(jsonPath("$.data.days.length()").value(2))
+                .andExpect(jsonPath("$.data.days[0].feedbacks.length()").value(2))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].feedbackId").value(saving.getId()))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[1].type").value(MISSING_CONTEXT_LABEL))
+                .andExpect(jsonPath("$.data.days[1].feedbacks[0].feedbackId").value(older.getId()));
+        request(MY_FEEDBACKS, teamId, member, "types", MISSING_CONTEXT_LABEL, "sort", "FREQUENCY")
+                .andExpect(jsonPath("$.data.days[0].feedbacks.length()").value(2))
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].feedbackId").value(frequency.getId()));
+        request(MY_FEEDBACKS, teamId, member, "types", MISSING_CONTEXT_LABEL)
+                .andExpect(jsonPath("$.data.days[0].feedbacks[0].feedbackId").value(frequency.getId()));
+        request(MY_FEEDBACKS, teamId, member)
+                .andExpect(jsonPath("$.data.days.length()").value(20))
+                .andExpect(jsonPath("$.data.days[0].feedbacks.length()").value(3));
+        request(MY_FEEDBACKS, teamId, member, "page", "1")
+                .andExpect(jsonPath("$.data.days.length()").value(1))
+                .andExpect(jsonPath("$.data.days[0].date").value(DATE.minusDays(20).toString()));
+        request(MY_FEEDBACKS, teamId, member, "page", "2")
+                .andExpect(jsonPath("$.data.days").isEmpty());
+        request(MY_FEEDBACKS, teamId, member, "page", "-1")
+                .andExpect(status().isBadRequest());
+        request(MY_FEEDBACKS, teamId, member, "from", DATE.toString(), "to", DATE.minusDays(1).toString())
+                .andExpect(status().isBadRequest());
+    }
+
     private TeamFixture saveTeam() {
         User leader = saveUser("목록 검증 팀장");
         User member = saveUser("목록 검증 팀원");
@@ -243,15 +330,21 @@ class SharedFeedbackControllerIntegrationTest {
     }
 
     private Feedback saveFeedback(TeamTaskType task, User owner, String type, String title, String exampleAfter) {
+        return saveFeedback(task, owner, type, title, exampleAfter, DATE, 1, 300);
+    }
+
+    private Feedback saveFeedback(TeamTaskType task, User owner, String type, String title, String exampleAfter,
+                                  LocalDate date, int count, int tokens) {
         Upload upload = Upload.builder().team(task.getTeam()).uploader(owner)
                 .fileName("conversations.json").conversationCount(1).build();
         upload.startAnalysis(1);
         upload.complete();
         entityManager.persist(upload);
         Feedback feedback = Feedback.builder().team(task.getTeam()).user(owner).taskType(task).upload(upload)
-                .feedbackDate(DATE).type(type).title(title).problem("문제 요약").improvement("개선 방안")
+                .feedbackDate(date).type(type).title(title).problem("문제 요약").improvement("개선 방안")
                 .causes(List.of("비공개 원인")).exampleBefore("개선 전 예시").exampleAfter(exampleAfter)
-                .occurrenceCount(1).build();
+                .occurrenceCount(count).expectedSavingTokens(tokens)
+                .expectedSavingCost(new BigDecimal("180.50")).expectedSavingTurns(2).build();
         entityManager.persist(feedback);
         return feedback;
     }
