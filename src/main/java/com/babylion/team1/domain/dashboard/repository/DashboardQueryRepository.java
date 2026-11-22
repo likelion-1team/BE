@@ -1,6 +1,8 @@
 package com.babylion.team1.domain.dashboard.repository;
 
 import com.babylion.team1.domain.dashboard.dto.ConversationAggregate;
+import com.babylion.team1.domain.dashboard.dto.CostRow;
+import com.babylion.team1.domain.dashboard.dto.request.CostGroupBy;
 import com.babylion.team1.domain.dashboard.dto.DatePeriod;
 import com.babylion.team1.domain.dashboard.dto.KpiCondition;
 import com.babylion.team1.domain.dashboard.dto.response.TaskTypeOption;
@@ -126,6 +128,37 @@ public class DashboardQueryRepository {
         bindCommon(query, condition, period);
         BigDecimal sum = query.getSingleResult();
         return sum != null ? sum : BigDecimal.ZERO;
+    }
+
+    /**
+     * 날짜 x 그룹 키별로 호출비 합과 검토·수습 시간 합을 구한다. 대화가 있는 조합만 담긴다.
+     * 키: MODEL이면 모델명(NULL이면 null 그대로, 서비스에서 UNKNOWN 처리), TASK_TYPE이면 업무 유형명, COST_TYPE이면 null.
+     * 호출비는 estimated_cost 합이며, 단가 없는 모델(NULL)은 합에서 빠져 0으로 본다.
+     */
+    public List<CostRow> aggregateCostsByDate(KpiCondition condition, DatePeriod period, CostGroupBy groupBy) {
+        String keyExpression = switch (groupBy) {
+            case MODEL -> "c.model";
+            case TASK_TYPE -> "c.taskType.name";
+            case COST_TYPE -> null;
+        };
+        // 키가 있으면 [날짜, 키, 호출비, 검토초, 수습초], 없으면(COST_TYPE) [날짜, 호출비, 검토초, 수습초]
+        boolean hasKey = keyExpression != null;
+        String select = "select c.conversationDate" + (hasKey ? ", " + keyExpression : "")
+                + ", sum(c.estimatedCost), sum(c.reviewTimeSec), sum(c.reworkTimeSec)";
+        String groupByClause = " group by c.conversationDate" + (hasKey ? ", " + keyExpression : "");
+        TypedQuery<Object[]> query = em.createQuery(select + conversationWhere(condition) + groupByClause,
+                Object[].class);
+        bindConversation(query, condition, period);
+
+        int offset = hasKey ? 1 : 0;
+        return query.getResultList().stream()
+                .map(row -> new CostRow(
+                        (LocalDate) row[0],
+                        hasKey ? (String) row[1] : null,
+                        toBigDecimal(row[1 + offset]),
+                        toLong(row[2 + offset]),
+                        toLong(row[3 + offset])))
+                .toList();
     }
 
     /**
