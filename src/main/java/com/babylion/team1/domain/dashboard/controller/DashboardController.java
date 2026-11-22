@@ -2,7 +2,9 @@ package com.babylion.team1.domain.dashboard.controller;
 
 import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
 import com.babylion.team1.domain.dashboard.dto.request.OnboardingEffectRequest;
+import com.babylion.team1.domain.dashboard.dto.request.TaskTypeStatsRequest;
 import com.babylion.team1.domain.dashboard.dto.request.TrendRequest;
+import com.babylion.team1.domain.dashboard.dto.response.TaskTypeStatsResponse;
 import com.babylion.team1.domain.dashboard.dto.response.TrendResponse;
 import com.babylion.team1.domain.dashboard.dto.response.FilterOptionsResponse;
 import com.babylion.team1.domain.dashboard.dto.response.KpiResponse;
@@ -54,6 +56,16 @@ public class DashboardController {
             @AuthenticationPrincipal Long userId,
             @ParameterObject @ModelAttribute TrendRequest request) {
         TrendResponse response = dashboardService.getTrends(teamId, userId, request);
+        return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
+    }
+
+    /** 교육 필요 업무(팀장 전용). 팀원이면 403 LEADER_ONLY */
+    @GetMapping("/dashboard/task-types")
+    public ResponseEntity<ApiResponse<TaskTypeStatsResponse>> getTaskTypeStats(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId,
+            @ParameterObject @ModelAttribute TaskTypeStatsRequest request) {
+        TaskTypeStatsResponse response = dashboardService.getTaskTypeStats(teamId, userId, request);
         return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
     }
 
