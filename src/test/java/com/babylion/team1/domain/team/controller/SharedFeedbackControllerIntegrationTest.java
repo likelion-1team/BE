@@ -102,6 +102,49 @@ class SharedFeedbackControllerIntegrationTest {
     }
 
     @Test
+    void conversationDetailReturnsOrderedMessagesAndOnlyMatchingEvidenceToOwner() throws Exception {
+        String path = "/api/v1/conversations/{conversationId}";
+        TeamFixture fixture = saveTeam();
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "근거 피드백", null);
+        feedback.share();
+        Long conversationId = addPrivateEvidence(feedback);
+        Conversation conversation = entityManager.find(Conversation.class, conversationId);
+        entityManager.persist(Message.builder().conversation(conversation).role(MessageRole.ASSISTANT)
+                .idx(2).content("수정한 응답").build());
+        entityManager.persist(Message.builder().conversation(conversation).role(MessageRole.USER)
+                .idx(1).content("다시 작성해 줘").isRework(true).build());
+        Feedback unrelated = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "다른 대화", null);
+        addPrivateEvidence(unrelated);
+        entityManager.flush();
+        entityManager.clear();
+
+        request(path, conversationId, fixture.member(), "highlightFeedbackId", feedback.getId().toString())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.data.startedAt").value(DATE + "T12:00:00+09:00"))
+                .andExpect(jsonPath("$.data.messages.length()").value(3))
+                .andExpect(jsonPath("$.data.messages[0].content").value("보호된 원문"))
+                .andExpect(jsonPath("$.data.messages[1].idx").value(1))
+                .andExpect(jsonPath("$.data.messages[1].role").value("user"))
+                .andExpect(jsonPath("$.data.messages[1].isRework").value(true))
+                .andExpect(jsonPath("$.data.messages[2].role").value("assistant"))
+                .andExpect(jsonPath("$.data.highlightIndexes[0]").value(0));
+        request(path, conversationId, fixture.member())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.highlightIndexes").isEmpty());
+        request(path, conversationId, fixture.member(), "highlightFeedbackId", unrelated.getId().toString())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.highlightIndexes").isEmpty());
+        request(path, conversationId, fixture.leader())
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("NOT_CONVERSATION_OWNER"));
+        request(path, Long.MAX_VALUE, fixture.member())
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("CONVERSATION_NOT_FOUND"));
+        mockMvc.perform(get(path, conversationId)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void sharedCasesReturnOnlyPublicFieldsAndSortTiesById() throws Exception {
         TeamFixture fixture = saveTeam();
         TeamFixture other = saveTeam();

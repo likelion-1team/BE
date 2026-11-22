@@ -8,5 +8,8 @@ public interface FeedbackEvidenceRepository extends JpaRepository<FeedbackEviden
 
     List<FeedbackEvidence> findByFeedbackIdOrderByIdAsc(Long feedbackId);
 
+    List<FeedbackEvidence> findByFeedbackIdAndConversationIdAndFeedbackUserId(
+            Long feedbackId, Long conversationId, Long userId);
+
     void deleteByFeedbackId(Long feedbackId);
 }
