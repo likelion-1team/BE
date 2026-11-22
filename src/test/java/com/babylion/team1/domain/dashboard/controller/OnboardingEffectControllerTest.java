@@ -151,6 +151,29 @@ class OnboardingEffectControllerTest {
     }
 
     @Test
+    @DisplayName("팀장이 scope=ME로 조회하면 본인 대화만, 팀원이 scope=TEAM이면 403 LEADER_ONLY")
+    void scopeParameter() throws Exception {
+        saveConversation(saveUpload(leader), leader, taskTypeA, LocalDate.of(2026, 11, 12), true, false, 500);
+        em.flush();
+        em.clear();
+
+        perform(leader, url(team.getId()) + "?scope=ME")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.before.conversationCount").value(0))
+                .andExpect(jsonPath("$.data.after.conversationCount").value(1))
+                .andExpect(jsonPath("$.data.after.tokensPerSuccess").value(500.0));
+
+        perform(leader, url(team.getId()) + "?scope=TEAM")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.before.conversationCount").value(3))
+                .andExpect(jsonPath("$.data.after.conversationCount").value(4));
+
+        perform(member1, url(team.getId()) + "?scope=TEAM")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+    }
+
+    @Test
     @DisplayName("성공률이 떨어졌는데 토큰만 줄었으면 qualityWarning은 true다 (taskTypes 필터 적용)")
     void qualityWarningWhenSuccessRateDropsAndTokensDecrease() throws Exception {
         perform(leader, url(team.getId()) + "?taskTypes=" + taskTypeA.getId())

@@ -130,6 +130,24 @@ class CostBreakdownControllerTest {
     }
 
     @Test
+    @DisplayName("팀장이 scope=ME로 조회하면 본인 대화만, 팀원이 scope=TEAM이면 403 LEADER_ONLY")
+    void scopeParameter() throws Exception {
+        saveConversation(saveUpload(leader), leader, saveTaskType("기타"), "gpt-4o", LocalDate.of(2026, 11, 2),
+                "10.0000", 0, 0);
+        em.flush();
+        em.clear();
+
+        perform(leader, url(team.getId()) + "?groupBy=COST_TYPE&scope=ME")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.points[0].items[*].cost", contains(10, 0, 0)))
+                .andExpect(jsonPath("$.data.points[2].items[*].cost", contains(0, 0, 0)));
+
+        perform(member1, url(team.getId()) + "?groupBy=COST_TYPE&scope=TEAM")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+    }
+
+    @Test
     @DisplayName("MODEL·DAY: 모델별 총비용(호출+검토+수습)을 이름순으로 응답하고, 모델이 없으면 UNKNOWN이다")
     void modelDaily() throws Exception {
         perform(leader, url(team.getId()) + "?groupBy=MODEL")
