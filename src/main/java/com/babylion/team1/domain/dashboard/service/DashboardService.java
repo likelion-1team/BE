@@ -8,6 +8,7 @@ import com.babylion.team1.domain.dashboard.dto.request.CostGroupBy;
 import com.babylion.team1.domain.dashboard.dto.response.CostBreakdownResponse;
 import com.babylion.team1.domain.dashboard.dto.response.CostItem;
 import com.babylion.team1.domain.dashboard.dto.response.CostPoint;
+import com.babylion.team1.domain.dashboard.dto.response.DayConversationItem;
 import com.babylion.team1.domain.dashboard.dto.response.DayDetailResponse;
 import com.babylion.team1.domain.dashboard.dto.response.DayTaskTypeItem;
 import com.babylion.team1.domain.dashboard.dto.DatePeriod;
@@ -308,15 +309,18 @@ public class DashboardService {
     }
 
     /**
-     * 차트에서 클릭한 날짜의 상세. 팀원이면 그날 본인 대화 목록, 팀장이면 그날 업무 유형별 건수·지표만 돌려준다.
-     * 팀장 응답에는 개인 식별 정보(user_id, 대화 제목 등)를 넣지 않는다.
+     * 차트에서 클릭한 날짜의 상세.
+     * 팀원: 그날 본인 대화 목록. 팀장: 그날 팀 업무 유형별 건수·지표 + 팀장 본인 대화 목록.
+     * 다른 팀원의 대화 제목·user_id 등 개인 식별 정보는 팀장에게도 내려주지 않는다.
      */
     public DayDetailResponse getDayDetail(Long teamId, Long userId, String dateValue) {
         LocalDate date = parseDate(dateValue);
         TeamMember member = getMember(teamId, userId);
+        // 대화 목록은 역할과 상관없이 항상 요청자 본인 것만 담는다
+        List<DayConversationItem> ownConversations = dashboardQueryRepository.findDayConversations(teamId, userId, date);
 
         if (!member.isLeader()) {
-            return DayDetailResponse.forMember(date, dashboardQueryRepository.findDayConversations(teamId, userId, date));
+            return DayDetailResponse.forMember(date, ownConversations);
         }
         KpiCondition condition = new KpiCondition(teamId, null, List.of(), List.of());
         List<DayTaskTypeItem> taskTypes = dashboardQueryRepository
@@ -324,7 +328,7 @@ public class DashboardService {
                 .entrySet().stream()
                 .map(entry -> DayTaskTypeItem.of(entry.getKey().name(), entry.getValue()))
                 .toList();
-        return DayDetailResponse.forLeader(date, taskTypes);
+        return DayDetailResponse.forLeader(date, ownConversations, taskTypes);
     }
 
     /**

@@ -36,6 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
  *  - member1 / 주간 보고서 작성 / 10:00 "보고서 초안" gpt-4o 4턴 1000토큰 성공
  *  - member1 / 회의록 정리      / 09:00 "회의록 요약" o3     6턴 1500토큰 실패 has_rework
  *  - member2 / 주간 보고서 작성 / 11:00 "팀원2 비밀 제목" 2000토큰 성공 has_rework
+ *  - leader  / 주간 보고서 작성 / 08:00 "팀장 본인 보고서" 3턴 600토큰 성공
  *  - 다른 팀 대화 (같은 날, "다른 팀 대화")
  * 2026-11-06 대화
  *  - member1 / 주간 보고서 작성 / "다음 날 대화"
@@ -87,6 +88,8 @@ class DayDetailControllerTest {
         saveConversation(team, upload2, member2, report, "팀원2 비밀 제목", "gpt-4o", DAY.atTime(11, 0), 4, 2000, true, true);
         saveConversation(team, upload1, member1, report, "다음 날 대화", "gpt-4o", DAY.plusDays(1).atTime(10, 0), 4, 500,
                 true, false);
+        saveConversation(team, saveUpload(team, leader), leader, report, "팀장 본인 보고서", "gpt-4o", DAY.atTime(8, 0), 3,
+                600, true, false);
 
         // 같은 날 다른 팀 대화: outsider가 팀장
         Team otherTeam = saveTeam("다른 팀", outsider);
@@ -121,22 +124,27 @@ class DayDetailControllerTest {
                 .andExpect(jsonPath("$.data.conversations[0].hasRework").value(true))
                 .andExpect(jsonPath("$.data.conversations[1].title").value("보고서 초안"))
                 .andExpect(jsonPath("$.data.conversations[1].taskType").value("주간 보고서 작성"))
-                .andExpect(content().string(not(containsString("팀원2 비밀 제목"))));
+                .andExpect(content().string(not(containsString("팀원2 비밀 제목"))))
+                .andExpect(content().string(not(containsString("팀장 본인 보고서"))));
     }
 
     @Test
-    @DisplayName("팀장이 조회하면 그날 팀 전체 대화를 업무 유형별로 집계해 응답하고 conversations는 null이다")
-    void leaderGetsTaskTypeAggregate() throws Exception {
+    @DisplayName("팀장이 조회하면 그날 팀 전체 대화의 업무 유형별 집계와 팀장 본인 대화를 응답한다")
+    void leaderGetsTaskTypeAggregateAndOwnConversations() throws Exception {
         perform(leader, url(team.getId(), "2026-11-05"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.date").value("2026-11-05"))
-                .andExpect(jsonPath("$.data.conversations").isEmpty())
+                // 대화 목록에는 팀장 본인 대화만
+                .andExpect(jsonPath("$.data.conversations", hasSize(1)))
+                .andExpect(jsonPath("$.data.conversations[0].title").value("팀장 본인 보고서"))
+                .andExpect(jsonPath("$.data.conversations[0].taskType").value("주간 보고서 작성"))
+                .andExpect(jsonPath("$.data.conversations[0].estimatedTokens").value(600))
                 .andExpect(jsonPath("$.data.taskTypes", hasSize(2)))
-                // 주간 보고서 작성: 2건(member1, member2), 재작업 1, 토큰 3000 / 성공 2
+                // 주간 보고서 작성: 3건(leader, member1, member2), 재작업 1, 토큰 3600 / 성공 3
                 .andExpect(jsonPath("$.data.taskTypes[0].name").value("주간 보고서 작성"))
-                .andExpect(jsonPath("$.data.taskTypes[0].count").value(2))
-                .andExpect(jsonPath("$.data.taskTypes[0].reworkRate").value(0.5))
-                .andExpect(jsonPath("$.data.taskTypes[0].tokensPerSuccess").value(1500.0))
+                .andExpect(jsonPath("$.data.taskTypes[0].count").value(3))
+                .andExpect(jsonPath("$.data.taskTypes[0].reworkRate").value(0.3333))
+                .andExpect(jsonPath("$.data.taskTypes[0].tokensPerSuccess").value(1200.0))
                 // 회의록 정리: 1건, 성공 0 -> 성공 업무당 토큰 null
                 .andExpect(jsonPath("$.data.taskTypes[1].name").value("회의록 정리"))
                 .andExpect(jsonPath("$.data.taskTypes[1].count").value(1))
@@ -145,7 +153,7 @@ class DayDetailControllerTest {
     }
 
     @Test
-    @DisplayName("팀장 응답에는 대화 제목·사용자 등 개인 식별 정보가 들어가지 않는다")
+    @DisplayName("팀장 응답에는 다른 팀원의 대화 제목·사용자 등 개인 식별 정보가 들어가지 않는다")
     void leaderResponseHasNoPersonalInformation() throws Exception {
         perform(leader, url(team.getId(), "2026-11-05"))
                 .andExpect(status().isOk())
@@ -167,7 +175,7 @@ class DayDetailControllerTest {
 
         perform(leader, url(team.getId(), "2026-11-10"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.conversations").isEmpty())
+                .andExpect(jsonPath("$.data.conversations", hasSize(0)))
                 .andExpect(jsonPath("$.data.taskTypes", hasSize(0)));
     }
 
