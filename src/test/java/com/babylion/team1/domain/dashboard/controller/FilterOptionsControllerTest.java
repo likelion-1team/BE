@@ -6,13 +6,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.babylion.team1.domain.conversation.entity.Conversation;
+import com.babylion.team1.domain.dashboard.DashboardFixture;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -22,7 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.HttpHeaders;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +40,7 @@ import org.springframework.transaction.annotation.Transactional;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
+@Import(DashboardFixture.class)
 class FilterOptionsControllerTest {
 
     @Autowired
@@ -50,7 +50,7 @@ class FilterOptionsControllerTest {
     private EntityManager em;
 
     @Autowired
-    private JwtProvider jwtProvider;
+    private DashboardFixture fixture;
 
     private User leader;
     private User member1;
@@ -60,42 +60,41 @@ class FilterOptionsControllerTest {
     private TeamTaskType taskTypeA;
     private TeamTaskType taskTypeB;
     private TeamTaskType taskTypeC;
-    private int externalIdSeq;
 
     @BeforeEach
     void setUp() {
         // 테스트도 로컬 DB를 쓰므로, 직접 가입해 둔 계정과 겹치지 않게 실행마다 고유한 이메일을 쓴다
         String suffix = UUID.randomUUID().toString().substring(0, 8);
-        leader = saveUser("팀장", "filter-it-leader-" + suffix + "@test.com");
-        member1 = saveUser("팀원1", "filter-it-member1-" + suffix + "@test.com");
-        User member2 = saveUser("팀원2", "filter-it-member2-" + suffix + "@test.com");
-        member3 = saveUser("팀원3", "filter-it-member3-" + suffix + "@test.com");
-        outsider = saveUser("외부인", "filter-it-outsider-" + suffix + "@test.com");
+        leader = fixture.user("팀장", "filter-it-leader-" + suffix + "@test.com");
+        member1 = fixture.user("팀원1", "filter-it-member1-" + suffix + "@test.com");
+        User member2 = fixture.user("팀원2", "filter-it-member2-" + suffix + "@test.com");
+        member3 = fixture.user("팀원3", "filter-it-member3-" + suffix + "@test.com");
+        outsider = fixture.user("외부인", "filter-it-outsider-" + suffix + "@test.com");
 
-        team = saveTeam("기획팀", leader);
+        team = fixture.team("기획팀", leader);
         em.persist(TeamMember.leader(team, leader));
         em.persist(TeamMember.member(team, member1));
         em.persist(TeamMember.member(team, member2));
         em.persist(TeamMember.member(team, member3));
 
-        taskTypeA = saveTaskType(team, "주간 보고서 작성");
-        taskTypeB = saveTaskType(team, "회의록 정리");
-        taskTypeC = saveTaskType(team, "고객 응대");
-        saveTaskType(team, "대화 없는 업무");
+        taskTypeA = fixture.taskType(team, "주간 보고서 작성");
+        taskTypeB = fixture.taskType(team, "회의록 정리");
+        taskTypeC = fixture.taskType(team, "고객 응대");
+        fixture.taskType(team, "대화 없는 업무");
 
-        Upload upload1 = saveUpload(team, member1);
-        Upload upload2 = saveUpload(team, member2);
-        saveConversation(team, upload1, member1, taskTypeA, "gpt-4o", LocalDate.of(2026, 11, 3));
-        saveConversation(team, upload1, member1, taskTypeB, "o3", LocalDate.of(2026, 11, 10));
-        saveConversation(team, upload1, member1, taskTypeA, null, LocalDate.of(2026, 11, 12));
-        saveConversation(team, upload2, member2, taskTypeA, "gpt-4o-mini", LocalDate.of(2026, 10, 28));
-        saveConversation(team, upload2, member2, taskTypeC, "gpt-4o", LocalDate.of(2026, 11, 20));
+        Upload upload1 = fixture.upload(team, member1);
+        Upload upload2 = fixture.upload(team, member2);
+        saveConversation(upload1, member1, taskTypeA, "gpt-4o", LocalDate.of(2026, 11, 3));
+        saveConversation(upload1, member1, taskTypeB, "o3", LocalDate.of(2026, 11, 10));
+        saveConversation(upload1, member1, taskTypeA, null, LocalDate.of(2026, 11, 12));
+        saveConversation(upload2, member2, taskTypeA, "gpt-4o-mini", LocalDate.of(2026, 10, 28));
+        saveConversation(upload2, member2, taskTypeC, "gpt-4o", LocalDate.of(2026, 11, 20));
 
         // 다른 팀: outsider가 팀장
-        Team otherTeam = saveTeam("다른 팀", outsider);
+        Team otherTeam = fixture.team("다른 팀", outsider);
         em.persist(TeamMember.leader(otherTeam, outsider));
-        TeamTaskType otherTaskType = saveTaskType(otherTeam, "다른 팀 업무");
-        saveConversation(otherTeam, saveUpload(otherTeam, outsider), outsider, otherTaskType,
+        TeamTaskType otherTaskType = fixture.taskType(otherTeam, "다른 팀 업무");
+        saveConversation(fixture.upload(otherTeam, outsider), outsider, otherTaskType,
                 "other-team-model", LocalDate.of(2026, 1, 1));
 
         em.flush();
@@ -165,47 +164,15 @@ class FilterOptionsControllerTest {
     }
 
     private ResultActions perform(User user, String url) throws Exception {
-        return mockMvc.perform(get(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId())));
+        return mockMvc.perform(fixture.get(user, url));
     }
 
     private String url(Long teamId) {
         return "/api/v1/teams/" + teamId + "/filter-options";
     }
 
-    private User saveUser(String name, String email) {
-        User user = User.builder().name(name).email(email).passwordHash("hashed-password").build();
-        em.persist(user);
-        return user;
-    }
-
-    private Team saveTeam(String name, User createdBy) {
-        Team saved = Team.builder().name(name).description("설명").createdBy(createdBy).build();
-        em.persist(saved);
-        return saved;
-    }
-
-    private TeamTaskType saveTaskType(Team owner, String name) {
-        TeamTaskType taskType = TeamTaskType.builder().team(owner).name(name).successDefinition("성공 정의").build();
-        em.persist(taskType);
-        return taskType;
-    }
-
-    private Upload saveUpload(Team owner, User uploader) {
-        Upload upload = Upload.builder().team(owner).uploader(uploader).fileName("conversations.json")
-                .conversationCount(10).build();
-        em.persist(upload);
-        return upload;
-    }
-
-    private void saveConversation(Team owner, Upload upload, User user, TeamTaskType taskType, String model,
-            LocalDate date) {
-        em.persist(Conversation.builder()
-                .team(owner).upload(upload).user(user).taskType(taskType)
-                .externalId("filter-ext-" + (++externalIdSeq)).title("대화").model(model)
-                .startedAt(date.atTime(10, 0)).conversationDate(date)
-                .turnCount(4).estimatedTokens(1000)
-                .isSuccess(true)
-                .build());
+    /** 대화의 팀은 upload의 팀을 따른다 */
+    private void saveConversation(Upload upload, User user, TeamTaskType taskType, String model, LocalDate date) {
+        fixture.save(fixture.conversation(upload, user, taskType, date).model(model));
     }
 }
