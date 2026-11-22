@@ -154,6 +154,28 @@ class TrendControllerTest {
     }
 
     @Test
+    @DisplayName("팀장이 scope=ME로 조회하면 본인 대화만, 팀원이 scope=TEAM이면 403 LEADER_ONLY")
+    void scopeParameter() throws Exception {
+        saveConversation(saveUpload(leader), leader, taskTypeA, "gpt-4o", TARGET_FROM,
+                true, false, 700, "0.1", 0);
+        em.flush();
+        em.clear();
+
+        perform(leader, url(team.getId()) + "?metric=conversationCount&scope=ME")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.points[0].value").value(1))
+                .andExpect(jsonPath("$.data.points[2].value").value(0));
+
+        perform(leader, url(team.getId()) + "?metric=conversationCount&scope=TEAM")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.points[0].value").value(5));
+
+        perform(member1, url(team.getId()) + "?metric=conversationCount&scope=TEAM")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+    }
+
+    @Test
     @DisplayName("costPerSuccess도 KPI 카드와 같은 계산식으로 날짜별 값을 낸다")
     void dailyCostPerSuccess() throws Exception {
         // 11-02 팀: 호출비 2.0 + 수습 360초 x 30000원/시간(3000) = 3002 / 성공 3건

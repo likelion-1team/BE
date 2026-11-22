@@ -163,6 +163,51 @@ class DashboardControllerTest {
     }
 
     @Test
+    @DisplayName("팀장이 scope=ME로 조회하면 본인 대화만 집계하고 coverage는 null이다")
+    void leaderGetsOwnMetricsWithScopeMe() throws Exception {
+        saveConversation(saveUpload(leader), leader, taskTypeA, "gpt-4o", LocalDate.of(2026, 11, 10),
+                true, false, 400, new BigDecimal("0.1"), 0, 0);
+        em.flush();
+        em.clear();
+
+        perform(leader, kpiUrl(team.getId()) + "?scope=ME")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conversationCount.value").value(1))
+                .andExpect(jsonPath("$.data.conversationCount.prevValue").value(0))
+                .andExpect(jsonPath("$.data.tokensPerSuccess.value").value(400.0))
+                .andExpect(jsonPath("$.data.successRate.value").value(1.0))
+                .andExpect(jsonPath("$.data.savingAmount.value").value(0))
+                .andExpect(jsonPath("$.data.coverage").isEmpty());
+
+        // scope=TEAM은 생략했을 때와 같은 팀 집계다
+        perform(leader, kpiUrl(team.getId()) + "?scope=TEAM")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conversationCount.value").value(4))
+                .andExpect(jsonPath("$.data.coverage.submittedMembers").value(3));
+    }
+
+    @Test
+    @DisplayName("팀원은 scope=ME면 본인 지표를 받고, scope=TEAM이면 403 LEADER_ONLY로 응답한다")
+    void memberScope() throws Exception {
+        perform(member1, kpiUrl(team.getId()) + "?scope=ME")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conversationCount.value").value(2))
+                .andExpect(jsonPath("$.data.coverage").isEmpty());
+
+        perform(member1, kpiUrl(team.getId()) + "?scope=TEAM")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+    }
+
+    @Test
+    @DisplayName("scope 값이 ME·TEAM이 아니면 400 INVALID_REQUEST로 응답한다")
+    void invalidScope() throws Exception {
+        perform(leader, kpiUrl(team.getId()) + "?scope=ALL")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+    }
+
+    @Test
     @DisplayName("팀장이 업무 유형·모델로 거르면 해당 대화만 집계한다 (쉼표로 여러 개)")
     void leaderFiltersByTaskTypesAndModels() throws Exception {
         perform(leader, kpiUrl(team.getId()) + "?taskTypes=" + taskTypeA.getId())
@@ -295,6 +340,7 @@ class DashboardControllerTest {
                 .andExpect(jsonPath(params + "[?(@.name == 'unit')].in").value("query"))
                 .andExpect(jsonPath(params + "[?(@.name == 'taskTypes')].in").value("query"))
                 .andExpect(jsonPath(params + "[?(@.name == 'models')].in").value("query"))
+                .andExpect(jsonPath(params + "[?(@.name == 'scope')].in").value("query"))
                 .andExpect(jsonPath(params + "[?(@.name == 'request')]").isEmpty());
     }
 
