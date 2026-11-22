@@ -16,6 +16,7 @@ import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSettingsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSettingsUpdateResponse;
+import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
@@ -102,6 +103,15 @@ public class TeamService {
         findTeam(teamId);
         requireTeamLeader(teamId, userId);
         return teamMemberRepository.findTeamMembersWithSubmission(teamId);
+    }
+
+    @Transactional(readOnly = true)
+    public TeamSubmissionResponse getTeamSubmissions(Long teamId, Long userId) {
+        findTeam(teamId);
+        teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
+                .filter(TeamMember::isLeader)
+                .orElseThrow(() -> new CustomException(ErrorCode.LEADER_ONLY));
+        return teamMemberRepository.findTeamSubmissionSummary(teamId);
     }
 
     @Transactional(readOnly = true)

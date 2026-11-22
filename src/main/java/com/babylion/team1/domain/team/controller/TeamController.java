@@ -13,6 +13,7 @@ import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSettingsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSettingsUpdateResponse;
+import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
 import com.babylion.team1.domain.team.service.TeamService;
 import com.babylion.team1.global.response.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -71,6 +72,15 @@ public class TeamController {
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId) {
         return ApiResponse.success("S200", "조회 성공", teamService.getTeamMembers(teamId, userId));
+    }
+
+    @Operation(summary = "팀 제출 현황 조회",
+            description = "팀장이 대상 기간의 제출 인원과 분석 완료 대화 수를 조회합니다.")
+    @GetMapping("/{teamId}/submissions")
+    public ApiResponse<TeamSubmissionResponse> getTeamSubmissions(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getTeamSubmissions(teamId, userId));
     }
 
     @Operation(summary = "내 피드백 목록 조회",

@@ -156,6 +156,74 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/teams/{teamId}/members'].post.responses['201']").exists());
     }
 
+    @Test
+    void summarizesCompletedSubmissionsForTheTargetPeriod() throws Exception {
+        TeamFixture fixture = createTeam(saveUser("팀장"));
+        User member = addMember(fixture, "제출한 팀원");
+        User pending = addMember(fixture, "미제출 팀원");
+        TeamFixture other = createTeam(pending);
+        TeamSettings settings = TeamSettings.createDefault(fixture.team());
+        settings.updateTarget(FROM, TO, FROM.plusDays(10), 120);
+        entityManager.persist(settings);
+
+        saveConversation(fixture, fixture.leader(), FROM, UploadStatus.DONE);
+        saveConversation(fixture, member, TO, UploadStatus.DONE);
+        saveConversation(fixture, member, TO.minusDays(1), UploadStatus.DONE);
+        saveConversation(fixture, pending, FROM.minusDays(1), UploadStatus.DONE);
+        saveConversation(fixture, pending, TO.plusDays(1), UploadStatus.DONE);
+        saveConversation(fixture, pending, FROM, UploadStatus.UPLOADED);
+        saveConversation(fixture, pending, FROM, UploadStatus.ANALYZING);
+        saveConversation(fixture, pending, FROM, UploadStatus.FAILED);
+        saveConversation(other, pending, FROM, UploadStatus.DONE);
+
+        submissions(fixture.team().getId(), fixture.leader())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.data.length()").value(4))
+                .andExpect(jsonPath("$.data.submittedMembers").value(2))
+                .andExpect(jsonPath("$.data.totalMembers").value(3))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(3))
+                .andExpect(jsonPath("$.data.targetCount").value(120));
+    }
+
+    @Test
+    void returnsZeroSubmissionsAndNullTargetWhenPeriodIsMissing() throws Exception {
+        TeamFixture fixture = createTeam(saveUser("팀장"));
+        addMember(fixture, "팀원");
+        saveConversation(fixture, fixture.leader(), FROM, UploadStatus.DONE);
+
+        submissions(fixture.team().getId(), fixture.leader())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.submittedMembers").value(0))
+                .andExpect(jsonPath("$.data.totalMembers").value(2))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(0))
+                .andExpect(jsonPath("$.data.targetCount").value(nullValue()));
+    }
+
+    @Test
+    void restrictsSubmissionsToTheRequestedTeamLeader() throws Exception {
+        TeamFixture fixture = createTeam(saveUser("팀장"));
+        User member = addMember(fixture, "팀원");
+        User outsider = saveUser("다른 팀장");
+        createTeam(outsider);
+
+        for (User nonLeader : new User[]{member, outsider}) {
+            submissions(fixture.team().getId(), nonLeader)
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+        }
+        submissions(Long.MAX_VALUE, fixture.leader())
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("TEAM_NOT_FOUND"));
+        mockMvc.perform(get("/api/v1/teams/{teamId}/submissions", fixture.team().getId()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    private ResultActions submissions(Long teamId, User user) throws Exception {
+        return mockMvc.perform(get("/api/v1/teams/{teamId}/submissions", teamId)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId())));
+    }
+
     private TeamFixture createTeam(User leader) {
         Team team = Team.builder().name("팀원 목록 검증").createdBy(leader).build();
         entityManager.persist(team);
