@@ -14,11 +14,13 @@ import org.hibernate.annotations.CreationTimestamp;
 @Entity
 @Table(
 	name = "team_members",
-	uniqueConstraints = @UniqueConstraint(name = "uk_team_members_team_user", columnNames = {"team_id", "user_id"})
+	uniqueConstraints = @UniqueConstraint(name = TeamMember.TEAM_USER_UNIQUE_CONSTRAINT, columnNames = {"team_id", "user_id"})
 )
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class TeamMember {
+
+	public static final String TEAM_USER_UNIQUE_CONSTRAINT = "uk_team_members_team_user";
 
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
