@@ -1,6 +1,13 @@
 package com.babylion.team1.domain.dashboard.service;
 
 import com.babylion.team1.domain.dashboard.dto.ConversationAggregate;
+import com.babylion.team1.domain.dashboard.dto.CostRow;
+import com.babylion.team1.domain.dashboard.dto.CostType;
+import com.babylion.team1.domain.dashboard.dto.request.CostBreakdownRequest;
+import com.babylion.team1.domain.dashboard.dto.request.CostGroupBy;
+import com.babylion.team1.domain.dashboard.dto.response.CostBreakdownResponse;
+import com.babylion.team1.domain.dashboard.dto.response.CostItem;
+import com.babylion.team1.domain.dashboard.dto.response.CostPoint;
 import com.babylion.team1.domain.dashboard.dto.DatePeriod;
 import com.babylion.team1.domain.dashboard.dto.KpiCondition;
 import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
@@ -32,10 +39,12 @@ import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.temporal.TemporalAdjusters;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,6 +56,8 @@ public class DashboardService {
 
     /** 교육 필요 업무에서 업무 유형마다 보여줄 피드백 유형 수 */
     private static final int TOP_FEEDBACK_TYPE_LIMIT = 3;
+    /** 비용 구조에서 model이 NULL인 대화의 키 */
+    private static final String UNKNOWN_COST_KEY = "UNKNOWN";
 
     private final TeamRepository teamRepository;
     private final TeamMemberRepository teamMemberRepository;
@@ -148,9 +159,7 @@ public class DashboardService {
         Map<LocalDate, ConversationAggregate> buckets = new LinkedHashMap<>();
         Map<LocalDate, Integer> bucketDays = new LinkedHashMap<>();
         for (LocalDate date = period.from(); !date.isAfter(period.to()); date = date.plusDays(1)) {
-            LocalDate bucket = request.unit() == KpiUnit.WEEK
-                    ? date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-                    : date;
+            LocalDate bucket = bucketOf(date, request.unit());
             ConversationAggregate dayAggregate = daily.getOrDefault(date, ConversationAggregate.empty());
             buckets.merge(bucket, dayAggregate, ConversationAggregate::plus);
             bucketDays.merge(bucket, 1, Integer::sum);
@@ -169,6 +178,77 @@ public class DashboardService {
                 .toList();
 
         return TrendResponse.of(metric, settings.map(TeamSettings::getOnboardingStartDate).orElse(null), points);
+    }
+
+    /**
+     * 기간별 비용 구조(누적 막대 차트용). 팀원이면 본인 값, 팀장이면 팀 집계.
+     * COST_TYPE은 호출비·검토비·수습비로 나누고, MODEL·TASK_TYPE은 대화별 총비용(호출+검토+수습)을 키별로 합산한다.
+     * 비용은 반올림 전 정밀도로 합산한 뒤 점·키마다 원 단위로 반올림한다. 대화가 없는 날(주)도 채워 날짜 오름차순.
+     */
+    public CostBreakdownResponse getCostBreakdown(Long teamId, Long userId, CostBreakdownRequest request) {
+        if (request.groupBy() == null) {
+            throw new CustomException(ErrorCode.INVALID_REQUEST, "groupBy는 필수입니다.");
+        }
+        CostGroupBy groupBy = request.groupBy();
+        TeamMember member = getMember(teamId, userId);
+        Optional<TeamSettings> settings = teamSettingsRepository.findByTeamId(teamId);
+
+        DatePeriod period = resolvePeriod(request.from(), request.to(), settings);
+        KpiCondition condition = new KpiCondition(
+                teamId,
+                member.isLeader() ? null : userId,
+                request.taskTypes(),
+                request.models());
+        int hourlyLaborCost = settings.map(TeamSettings::getHourlyLaborCost)
+                .orElse(TeamSettings.DEFAULT_HOURLY_LABOR_COST);
+
+        // 점(날짜 또는 주 시작일)을 먼저 모두 만들어 두고, 집계 행을 해당 점의 키별로 더한다.
+        Map<LocalDate, Map<String, BigDecimal>> buckets = new LinkedHashMap<>();
+        for (LocalDate date = period.from(); !date.isAfter(period.to()); date = date.plusDays(1)) {
+            buckets.computeIfAbsent(bucketOf(date, request.unit()), bucket -> emptyCostItems(groupBy));
+        }
+        for (CostRow row : dashboardQueryRepository.aggregateCostsByDate(condition, period, groupBy)) {
+            Map<String, BigDecimal> items = buckets.get(bucketOf(row.date(), request.unit()));
+            if (groupBy == CostGroupBy.COST_TYPE) {
+                items.merge(CostType.CALL.name(), row.callCost(), BigDecimal::add);
+                items.merge(CostType.REVIEW.name(), row.reviewCost(hourlyLaborCost), BigDecimal::add);
+                items.merge(CostType.REWORK.name(), row.reworkCost(hourlyLaborCost), BigDecimal::add);
+            } else {
+                String key = row.key() != null ? row.key() : UNKNOWN_COST_KEY;
+                items.merge(key, row.totalCost(hourlyLaborCost), BigDecimal::add);
+            }
+        }
+
+        List<CostPoint> points = buckets.entrySet().stream()
+                .map(entry -> new CostPoint(
+                        entry.getKey(),
+                        entry.getValue().entrySet().stream()
+                                .map(item -> CostItem.of(item.getKey(), item.getValue()))
+                                .toList()))
+                .toList();
+        return CostBreakdownResponse.of(groupBy, points);
+    }
+
+    /**
+     * 한 점의 비어 있는 비용 항목.
+     * COST_TYPE은 CALL·REVIEW·REWORK를 0으로 미리 채운다(순서 고정).
+     * MODEL·TASK_TYPE은 데이터가 있는 키만 이름순으로 담고, UNKNOWN은 맨 뒤에 둔다.
+     */
+    private Map<String, BigDecimal> emptyCostItems(CostGroupBy groupBy) {
+        if (groupBy == CostGroupBy.COST_TYPE) {
+            Map<String, BigDecimal> items = new LinkedHashMap<>();
+            for (CostType costType : CostType.values()) {
+                items.put(costType.name(), BigDecimal.ZERO);
+            }
+            return items;
+        }
+        return new TreeMap<>(Comparator.comparing((String key) -> key.equals(UNKNOWN_COST_KEY))
+                .thenComparing(Comparator.naturalOrder()));
+    }
+
+    /** DAY면 그날, WEEK면 그 주의 월요일 */
+    private LocalDate bucketOf(LocalDate date, KpiUnit unit) {
+        return unit == KpiUnit.WEEK ? date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)) : date;
     }
 
     /** 온보딩 시작일이 대상 기간 밖이라 한쪽 기간이 비면(from > to) 대화 0건으로 본다 */
