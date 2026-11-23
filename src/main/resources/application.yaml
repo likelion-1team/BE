@@ -16,12 +16,19 @@ spring:
         dialect: org.hibernate.dialect.MySQLDialect
 server:
   port: 8080
+  forward-headers-strategy: native
 jwt:
   secret: ${JWT_SECRET}
-  access-token-expiration: 1800000
-  refresh-token-expiration: 1209600000
+  access-token-expiration: 900000
+  refresh-token-expiration: 604800000
 
 app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+  rate-limit:
+    email-check:
+      max-requests: ${EMAIL_CHECK_MAX_REQUESTS:20}
+      window: ${EMAIL_CHECK_WINDOW:60s}
   upload:
     directory: ${UPLOAD_DIRECTORY:${java.io.tmpdir}/babylion-team1/uploads}
     max-expanded-size: ${UPLOAD_MAX_EXPANDED_SIZE:100MB}
