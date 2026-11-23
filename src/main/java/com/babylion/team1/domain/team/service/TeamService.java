@@ -1,7 +1,9 @@
 package com.babylion.team1.domain.team.service;
 
+import com.babylion.team1.domain.feedback.dto.response.GuideAddResponse;
 import com.babylion.team1.domain.feedback.dto.response.GuidesResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
+import com.babylion.team1.domain.feedback.entity.Feedback;
 import com.babylion.team1.domain.feedback.entity.FeedbackType;
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
@@ -105,6 +107,15 @@ public class TeamService {
         findTeam(teamId);
         requireTeamMember(teamId, userId);
         return GuidesResponse.from(feedbackRepository.findGuides(teamId, type, FeedbackType.alternateValue(type)));
+    }
+
+    @Transactional
+    public GuideAddResponse addGuide(Long feedbackId, Long userId) {
+        Feedback feedback = feedbackRepository.findByIdForUpdate(feedbackId)
+                .orElseThrow(() -> new CustomException(ErrorCode.FEEDBACK_NOT_FOUND));
+        requireTeamLeader(feedback.getTeam().getId(), userId);
+        feedback.addToGuide();
+        return new GuideAddResponse(true, feedback.guideAddedAtInKst());
     }
 
     @Transactional(readOnly = true)

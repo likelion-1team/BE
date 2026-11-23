@@ -12,6 +12,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.AccessLevel;
@@ -184,7 +185,7 @@ public class Feedback {
 			return;
 		}
 		this.isGuide = true;
-		this.guideAddedAt = LocalDateTime.now(KST);
+		this.guideAddedAt = LocalDateTime.now(KST).truncatedTo(ChronoUnit.MICROS);
 	}
 
 	public OffsetDateTime guideAddedAtInKst() {
