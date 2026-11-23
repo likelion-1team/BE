@@ -4,8 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -21,6 +24,7 @@ import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -37,6 +41,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -140,6 +145,98 @@ class FeedbackGuideControllerIntegrationTest {
         mockMvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
                 .andExpect(jsonPath("$.paths['/api/v1/feedbacks/{feedbackId}/guide'].put.responses['200']").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/feedbacks/{feedbackId}/guide'].put.requestBody").doesNotExist());
+    }
+
+    @Test
+    void removeGuidePreservesSharedFeedbackAndAllowsReassignment() throws Exception {
+        Fixture fixture = saveFixture(true);
+        assign(fixture).andExpect(status().isOk());
+        entityManager.flush();
+        entityManager.clear();
+        Feedback before = feedbackRepository.findById(fixture.feedbackId()).orElseThrow();
+        LocalDateTime sharedAt = before.getSharedAt();
+        String title = before.getTitle();
+
+        remove(fixture.feedbackId(), fixture.leaderId())
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+        entityManager.flush();
+        entityManager.clear();
+
+        Feedback after = feedbackRepository.findById(fixture.feedbackId()).orElseThrow();
+        assertThat(after.getIsShared()).isTrue();
+        assertThat(after.getSharedAt()).isEqualTo(sharedAt);
+        assertThat(after.getTitle()).isEqualTo(title);
+        assertThat(after.getIsGuide()).isFalse();
+        assertThat(after.getGuideAddedAt()).isNull();
+        remove(fixture.feedbackId(), fixture.leaderId())
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        mockMvc.perform(get(GUIDES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.ownerId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.groups").isEmpty());
+        mockMvc.perform(get(SHARED_CASES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.leaderId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].feedbackId").value(fixture.feedbackId()))
+                .andExpect(jsonPath("$.data.items[0].isGuide").value(false));
+
+        assign(fixture).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.isGuide").value(true))
+                .andExpect(jsonPath("$.data.guideAddedAt", endsWith("+09:00")));
+        mockMvc.perform(get(GUIDES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.ownerId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.groups[0].guides[0].feedbackId").value(fixture.feedbackId()));
+    }
+
+    @Test
+    void removeGuideReturnsNoContentAfterSharingWasRevoked() throws Exception {
+        Fixture fixture = saveFixture(true);
+        assign(fixture).andExpect(status().isOk());
+        mockMvc.perform(patch("/api/v1/feedbacks/{feedbackId}/share", fixture.feedbackId())
+                        .header(HttpHeaders.AUTHORIZATION, bearer(fixture.ownerId()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"shared\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.isShared").value(false));
+
+        remove(fixture.feedbackId(), fixture.leaderId())
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+        entityManager.flush();
+        entityManager.clear();
+        assertRevoked(fixture);
+    }
+
+    @Test
+    void removeGuideRequiresFeedbackAndItsTeamLeader() throws Exception {
+        Fixture fixture = saveFixture(true);
+        Fixture other = saveFixture(true);
+        assign(fixture).andExpect(status().isOk());
+
+        remove(fixture.feedbackId(), fixture.ownerId())
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+        remove(fixture.feedbackId(), other.leaderId())
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+        remove(Long.MAX_VALUE, fixture.leaderId())
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
+        mockMvc.perform(delete(GUIDE, fixture.feedbackId()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+
+        assertThat(feedbackRepository.findById(fixture.feedbackId()).orElseThrow().getIsGuide()).isTrue();
+    }
+
+    @Test
+    void removeGuideExposesNoContentInOpenApi() throws Exception {
+        mockMvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.paths['/api/v1/feedbacks/{feedbackId}/guide'].delete.responses['204']").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/feedbacks/{feedbackId}/guide'].delete.responses['204'].content")
+                        .doesNotExist())
+                .andExpect(jsonPath("$.paths['/api/v1/feedbacks/{feedbackId}/guide'].delete.requestBody").doesNotExist());
     }
 
     @Test
@@ -277,6 +374,10 @@ class FeedbackGuideControllerIntegrationTest {
     private ResultActions assign(Fixture fixture) throws Exception {
         return mockMvc.perform(put(GUIDE, fixture.feedbackId())
                 .header(HttpHeaders.AUTHORIZATION, bearer(fixture.leaderId())));
+    }
+
+    private ResultActions remove(Long feedbackId, Long userId) throws Exception {
+        return mockMvc.perform(delete(GUIDE, feedbackId).header(HttpHeaders.AUTHORIZATION, bearer(userId)));
     }
 
     private void assertRevoked(Fixture fixture) throws Exception {
