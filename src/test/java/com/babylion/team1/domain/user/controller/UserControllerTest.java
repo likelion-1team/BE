@@ -4,9 +4,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.babylion.team1.domain.auth.repository.AuthSessionRepository;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
 import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,6 +36,15 @@ class UserControllerTest {
     @Autowired
     private JwtProvider jwtProvider;
 
+    @Autowired
+    private TestAccessTokens accessTokens;
+
+    @Autowired
+    private AuthSessionRepository authSessionRepository;
+
+    @Autowired
+    private EntityManager entityManager;
+
     @Value("${jwt.secret}")
     private String jwtSecret;
 
@@ -42,35 +54,36 @@ class UserControllerTest {
         User user = saveUser("홍길동", "me@test.com");
 
         mockMvc.perform(get(ME_URL)
-                        .header(HttpHeaders.AUTHORIZATION, bearer(jwtProvider.createAccessToken(user.getId()))))
+                        .header(HttpHeaders.AUTHORIZATION, bearer(accessTokens.create(user.getId()))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.message").value("조회 성공"))
                 .andExpect(jsonPath("$.data.userId").value(user.getId()))
                 .andExpect(jsonPath("$.data.name").value("홍길동"))
                 .andExpect(jsonPath("$.data.email").value("me@test.com"))
+                .andExpect(jsonPath("$.data.role").doesNotExist())
                 .andExpect(jsonPath("$.data.passwordHash").doesNotExist())
                 .andExpect(jsonPath("$.data.refreshToken").doesNotExist());
     }
 
     @Test
-    @DisplayName("토큰 없이 요청하면 401 UNAUTHORIZED로 응답한다")
+    @DisplayName("토큰 없이 요청하면 401 AUTH_REQUIRED로 응답한다")
     void getMeWithoutToken() throws Exception {
         mockMvc.perform(get(ME_URL))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
     }
 
     @Test
-    @DisplayName("만료된 액세스 토큰으로 요청하면 401 EXPIRED_TOKEN으로 응답한다")
+    @DisplayName("만료된 액세스 토큰으로 요청하면 401 SESSION_EXPIRED으로 응답한다")
     void getMeWithExpiredToken() throws Exception {
         User user = saveUser("홍길동", "me-expired@test.com");
         JwtProvider expiredProvider = new JwtProvider(jwtSecret, -1000L, -1000L);
 
         mockMvc.perform(get(ME_URL)
-                        .header(HttpHeaders.AUTHORIZATION, bearer(expiredProvider.createAccessToken(user.getId()))))
+                        .header(HttpHeaders.AUTHORIZATION, bearer(expiredProvider.createAccessToken(user.getId(), accessTokens.createSession(user.getId())))))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("EXPIRED_TOKEN"));
+                .andExpect(jsonPath("$.code").value("SESSION_EXPIRED"));
     }
 
     @Test
@@ -88,7 +101,7 @@ class UserControllerTest {
         JwtProvider otherProvider = new JwtProvider("other-secret-key-for-forged-token-test-0123456789", 60000L, 60000L);
 
         mockMvc.perform(get(ME_URL)
-                        .header(HttpHeaders.AUTHORIZATION, bearer(otherProvider.createAccessToken(user.getId()))))
+                        .header(HttpHeaders.AUTHORIZATION, bearer(otherProvider.createAccessToken(user.getId(), accessTokens.createSession(user.getId())))))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
     }
@@ -99,22 +112,38 @@ class UserControllerTest {
         User user = saveUser("홍길동", "me-refresh@test.com");
 
         mockMvc.perform(get(ME_URL)
-                        .header(HttpHeaders.AUTHORIZATION, bearer(jwtProvider.createRefreshToken(user.getId()))))
+                        .header(HttpHeaders.AUTHORIZATION, bearer(jwtProvider.createRefreshToken(user.getId(), accessTokens.createSession(user.getId())))))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
     }
 
     @Test
-    @DisplayName("토큰은 유효하지만 사용자가 없으면 404 USER_NOT_FOUND로 응답한다")
-    void getMeUserNotFound() throws Exception {
+    @DisplayName("세션이 폐기됐으면 만료 전 액세스 토큰이어도 401 SESSION_EXPIRED로 응답한다")
+    void getMeWithRevokedSession() throws Exception {
+        User user = saveUser("홍길동", "me-revoked@test.com");
+        String sessionId = accessTokens.createSession(user.getId());
+        authSessionRepository.findById(sessionId).orElseThrow().revoke();
+        authSessionRepository.flush();
+
+        mockMvc.perform(get(ME_URL)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(jwtProvider.createAccessToken(user.getId(), sessionId))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("SESSION_EXPIRED"));
+    }
+
+    @Test
+    @DisplayName("사용자가 삭제되면 세션도 함께 사라져 401 SESSION_EXPIRED로 응답한다")
+    void getMeUserDeleted() throws Exception {
         User user = saveUser("홍길동", "me-deleted@test.com");
-        String accessToken = jwtProvider.createAccessToken(user.getId());
-        userRepository.delete(user);
+        String accessToken = accessTokens.create(user.getId());
+        // 세션은 DB의 ON DELETE CASCADE로 지워지므로 영속성 컨텍스트를 비우고 확인한다.
+        entityManager.clear();
+        userRepository.deleteById(user.getId());
         userRepository.flush();
 
         mockMvc.perform(get(ME_URL).header(HttpHeaders.AUTHORIZATION, bearer(accessToken)))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("SESSION_EXPIRED"));
     }
 
     private User saveUser(String name, String email) {

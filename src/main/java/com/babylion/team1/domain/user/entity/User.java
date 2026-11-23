@@ -26,10 +26,6 @@ public class User {
 	@Column(name = "password_hash", nullable = false, length = 255)
 	private String passwordHash;
 
-	/** 현재 리프레시 토큰. 로그아웃하면 NULL */
-	@Column(name = "refresh_token", length = 500)
-	private String refreshToken;
-
 	@Column(name = "name", nullable = false, length = 50)
 	private String name;
 
@@ -42,13 +38,5 @@ public class User {
 		this.email = email;
 		this.passwordHash = passwordHash;
 		this.name = name;
-	}
-
-	public void updateRefreshToken(String refreshToken) {
-		this.refreshToken = refreshToken;
-	}
-
-	public void clearRefreshToken() {
-		this.refreshToken = null;
 	}
 }

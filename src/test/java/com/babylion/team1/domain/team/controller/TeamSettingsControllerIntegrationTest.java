@@ -19,7 +19,7 @@ import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
 import com.babylion.team1.domain.team.repository.TeamTaskTypeRepository;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
@@ -80,7 +80,7 @@ class TeamSettingsControllerIntegrationTest {
     @Autowired
     private ObjectMapper objectMapper;
     @Autowired
-    private JwtProvider jwtProvider;
+    private TestAccessTokens accessTokens;
     @Autowired
     private TeamSettingsRepository settingsRepository;
     @Autowired
@@ -433,7 +433,7 @@ class TeamSettingsControllerIntegrationTest {
     }
 
     private String bearer(User user) {
-        return "Bearer " + jwtProvider.createAccessToken(user.getId());
+        return "Bearer " + accessTokens.create(user.getId());
     }
 
     private record TeamFixture(Team team, User leader) {}

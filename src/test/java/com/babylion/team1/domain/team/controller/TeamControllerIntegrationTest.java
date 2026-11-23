@@ -16,7 +16,7 @@ import com.babylion.team1.domain.team.repository.TeamRepository;
 import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDateTime;
@@ -48,7 +48,7 @@ class TeamControllerIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
     @Autowired
-    private JwtProvider jwtProvider;
+    private TestAccessTokens accessTokens;
     @Autowired
     private UserRepository userRepository;
     @Autowired
@@ -163,10 +163,10 @@ class TeamControllerIntegrationTest {
     void requiresAnAccessTokenForBothEndpoints() throws Exception {
         mockMvc.perform(get(PATH))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
         mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Team\"}"))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
         mockMvc.perform(get(PATH).header(HttpHeaders.AUTHORIZATION, "Bearer invalid"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
@@ -227,6 +227,6 @@ class TeamControllerIntegrationTest {
     }
 
     private String bearer(User user) {
-        return "Bearer " + jwtProvider.createAccessToken(user.getId());
+        return "Bearer " + accessTokens.create(user.getId());
     }
 }

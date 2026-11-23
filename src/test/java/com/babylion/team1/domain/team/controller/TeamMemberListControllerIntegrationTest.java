@@ -14,7 +14,7 @@ import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.upload.entity.UploadStatus;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -43,7 +43,7 @@ class TeamMemberListControllerIntegrationTest {
     @Autowired
     private EntityManager entityManager;
     @Autowired
-    private JwtProvider jwtProvider;
+    private TestAccessTokens accessTokens;
 
     @Test
     void includesLeaderAndCompletedConversationsOnBothDateBoundaries() throws Exception {
@@ -147,7 +147,7 @@ class TeamMemberListControllerIntegrationTest {
     @Test
     void requiresAccessTokenAndExposesGetOperationAlongsidePost() throws Exception {
         mockMvc.perform(get(PATH, 1L)).andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
         mockMvc.perform(get(PATH, 1L).header(HttpHeaders.AUTHORIZATION, "Bearer invalid"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
@@ -221,7 +221,7 @@ class TeamMemberListControllerIntegrationTest {
 
     private ResultActions submissions(Long teamId, User user) throws Exception {
         return mockMvc.perform(get("/api/v1/teams/{teamId}/submissions", teamId)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId())));
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(user.getId())));
     }
 
     private TeamFixture createTeam(User leader) {
@@ -271,7 +271,7 @@ class TeamMemberListControllerIntegrationTest {
 
     private ResultActions listMembers(Long teamId, User user) throws Exception {
         return mockMvc.perform(get(PATH, teamId).header(HttpHeaders.AUTHORIZATION,
-                "Bearer " + jwtProvider.createAccessToken(user.getId())));
+                "Bearer " + accessTokens.create(user.getId())));
     }
 
     private record TeamFixture(Team team, User leader, TeamTaskType type) {}
