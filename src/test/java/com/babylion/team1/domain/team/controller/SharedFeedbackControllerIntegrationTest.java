@@ -1,9 +1,13 @@
 package com.babylion.team1.domain.team.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -46,6 +50,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 class SharedFeedbackControllerIntegrationTest {
 
+    private static final String REACTION = "/api/v1/feedbacks/{feedbackId}/reaction";
     private static final String SHARE = "/api/v1/feedbacks/{feedbackId}/share";
     private static final String SHARED_CASES = "/api/v1/teams/{teamId}/shared-cases";
     private static final String MY_FEEDBACKS = "/api/v1/teams/{teamId}/feedbacks";
@@ -427,6 +432,83 @@ class SharedFeedbackControllerIntegrationTest {
                 .andExpect(status().isBadRequest());
         request(MY_FEEDBACKS, teamId, member, "from", DATE.toString(), "to", DATE.minusDays(1).toString())
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void reactionIsReplacedAndCanBeCancelledRepeatedly() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "반응", null);
+        entityManager.flush();
+        Long id = feedback.getId();
+        String ownerToken = "Bearer " + jwtProvider.createAccessToken(fixture.member().getId());
+
+        recordReaction(id, ownerToken, """
+                {"reaction":"NOT_APPLICABLE","reason":"이미 지정했음"}
+                """)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.data.reaction").value("NOT_APPLICABLE"))
+                .andExpect(jsonPath("$.data.updatedAt", endsWith("+09:00")));
+        assertThat(jdbc.queryForObject("select reason from feedback_reactions where feedback_id = ?",
+                String.class, id)).isEqualTo("이미 지정했음");
+
+        recordReaction(id, ownerToken, """
+                {"reaction":"HELPFUL"}
+                """)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.reaction").value("HELPFUL"));
+        assertThat(jdbc.queryForObject("select count(*) from feedback_reactions where feedback_id = ?",
+                Long.class, id)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("select reason from feedback_reactions where feedback_id = ?",
+                String.class, id)).isNull();
+
+        for (int attempt = 0; attempt < 2; attempt++) {
+            mockMvc.perform(delete(REACTION, id).header(HttpHeaders.AUTHORIZATION, ownerToken))
+                    .andExpect(status().isNoContent())
+                    .andExpect(content().string(""));
+        }
+        entityManager.flush();
+        assertThat(jdbc.queryForObject("select count(*) from feedback_reactions where feedback_id = ?",
+                Long.class, id)).isZero();
+    }
+
+    @Test
+    void reactionChecksInputAndOwnership() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "반응 권한", null);
+        entityManager.flush();
+        Long id = feedback.getId();
+        String ownerToken = "Bearer " + jwtProvider.createAccessToken(fixture.member().getId());
+        String leaderToken = "Bearer " + jwtProvider.createAccessToken(fixture.leader().getId());
+        String validBody = "{\"reaction\":\"HELPFUL\"}";
+
+        for (String body : List.of("{}", "{\"reaction\":\"UNKNOWN\"}",
+                "{\"reaction\":\"HELPFUL\",\"reason\":\"사유\"}",
+                "{\"reaction\":\"NOT_APPLICABLE\",\"reason\":\"" + "a".repeat(201) + "\"}")) {
+            recordReaction(id, ownerToken, body)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        }
+        recordReaction(id, leaderToken, validBody)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("NOT_FEEDBACK_OWNER"));
+        recordReaction(Long.MAX_VALUE, ownerToken, validBody)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
+        mockMvc.perform(delete(REACTION, id).header(HttpHeaders.AUTHORIZATION, leaderToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("NOT_FEEDBACK_OWNER"));
+        mockMvc.perform(delete(REACTION, Long.MAX_VALUE).header(HttpHeaders.AUTHORIZATION, ownerToken))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
+        mockMvc.perform(delete(REACTION, id)).andExpect(status().isUnauthorized());
+    }
+
+    private ResultActions recordReaction(Long feedbackId, String token, String body) throws Exception {
+        return mockMvc.perform(put(REACTION, feedbackId)
+                .header(HttpHeaders.AUTHORIZATION, token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body));
     }
 
     private TeamFixture saveTeam() {
