@@ -185,11 +185,24 @@ public class TeamService {
 
     @Transactional
     public GuideAddResponse addGuide(Long feedbackId, Long userId) {
-        Feedback feedback = feedbackRepository.findByIdForUpdate(feedbackId)
-                .orElseThrow(() -> new CustomException(ErrorCode.FEEDBACK_NOT_FOUND));
+        Feedback feedback = lockFeedback(feedbackId);
         requireTeamLeader(feedback.getTeam().getId(), userId);
         feedback.addToGuide();
         return new GuideAddResponse(true, feedback.guideAddedAtInKst());
+    }
+
+    @Transactional
+    public void removeGuide(Long feedbackId, Long userId) {
+        Feedback feedback = lockFeedback(feedbackId);
+        teamMemberRepository.findByTeamIdAndUserId(feedback.getTeam().getId(), userId)
+                .filter(TeamMember::isLeader)
+                .orElseThrow(() -> new CustomException(ErrorCode.LEADER_ONLY));
+        feedback.removeFromGuide();
+    }
+
+    private Feedback lockFeedback(Long feedbackId) {
+        return feedbackRepository.findByIdForUpdate(feedbackId)
+                .orElseThrow(() -> new CustomException(ErrorCode.FEEDBACK_NOT_FOUND));
     }
 
     @Transactional(readOnly = true)
