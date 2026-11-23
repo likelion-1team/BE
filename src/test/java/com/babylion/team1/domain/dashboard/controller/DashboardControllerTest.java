@@ -4,15 +4,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.babylion.team1.domain.conversation.entity.Conversation;
-import com.babylion.team1.domain.feedback.entity.Feedback;
+import com.babylion.team1.domain.dashboard.DashboardFixture;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -23,7 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.HttpHeaders;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,6 +42,7 @@ import org.springframework.transaction.annotation.Transactional;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
+@Import(DashboardFixture.class)
 class DashboardControllerTest {
 
     private static final LocalDate TARGET_FROM = LocalDate.of(2026, 11, 1);
@@ -56,7 +55,7 @@ class DashboardControllerTest {
     private EntityManager em;
 
     @Autowired
-    private JwtProvider jwtProvider;
+    private DashboardFixture fixture;
 
     private User leader;
     private User member1;
@@ -66,19 +65,17 @@ class DashboardControllerTest {
     private TeamSettings settings;
     private TeamTaskType taskTypeA;
     private TeamTaskType taskTypeB;
-    private int externalIdSeq;
 
     @BeforeEach
     void setUp() {
         // 테스트도 로컬 DB를 쓰므로, 직접 가입해 둔 계정과 겹치지 않게 실행마다 고유한 이메일을 쓴다
         String suffix = UUID.randomUUID().toString().substring(0, 8);
-        leader = saveUser("팀장", "dashboard-it-leader-" + suffix + "@test.com");
-        member1 = saveUser("팀원1", "dashboard-it-member1-" + suffix + "@test.com");
-        member2 = saveUser("팀원2", "dashboard-it-member2-" + suffix + "@test.com");
-        outsider = saveUser("외부인", "dashboard-it-outsider-" + suffix + "@test.com");
+        leader = fixture.user("팀장", "dashboard-it-leader-" + suffix + "@test.com");
+        member1 = fixture.user("팀원1", "dashboard-it-member1-" + suffix + "@test.com");
+        member2 = fixture.user("팀원2", "dashboard-it-member2-" + suffix + "@test.com");
+        outsider = fixture.user("외부인", "dashboard-it-outsider-" + suffix + "@test.com");
 
-        team = Team.builder().name("기획팀").description("설명").createdBy(leader).build();
-        em.persist(team);
+        team = fixture.team("기획팀", leader);
         em.persist(TeamMember.leader(team, leader));
         em.persist(TeamMember.member(team, member1));
         em.persist(TeamMember.member(team, member2));
@@ -87,13 +84,11 @@ class DashboardControllerTest {
         settings.updateTarget(TARGET_FROM, TARGET_TO, null, 10);
         em.persist(settings);
 
-        taskTypeA = TeamTaskType.builder().team(team).name("주간 보고서 작성").successDefinition("수정 없이 제출").build();
-        taskTypeB = TeamTaskType.builder().team(team).name("회의록 정리").successDefinition("바로 공유").build();
-        em.persist(taskTypeA);
-        em.persist(taskTypeB);
+        taskTypeA = fixture.taskType(team, "주간 보고서 작성", "수정 없이 제출");
+        taskTypeB = fixture.taskType(team, "회의록 정리", "바로 공유");
 
-        Upload upload1 = saveUpload(member1);
-        Upload upload2 = saveUpload(member2);
+        Upload upload1 = fixture.upload(team, member1);
+        Upload upload2 = fixture.upload(team, member2);
 
         saveConversation(upload1, member1, taskTypeA, "gpt-4o", LocalDate.of(2026, 11, 3),
                 true, false, 1000, new BigDecimal("0.5"), 600, 0);
@@ -160,6 +155,51 @@ class DashboardControllerTest {
                 .andExpect(jsonPath("$.data.coverage.analyzedConversations").value(3))
                 .andExpect(jsonPath("$.data.coverage.targetCount").value(10))
                 .andExpect(jsonPath("$.data.coverage.coverageRate").value(0.3));
+    }
+
+    @Test
+    @DisplayName("팀장이 scope=ME로 조회하면 본인 대화만 집계하고 coverage는 null이다")
+    void leaderGetsOwnMetricsWithScopeMe() throws Exception {
+        saveConversation(fixture.upload(team, leader), leader, taskTypeA, "gpt-4o", LocalDate.of(2026, 11, 10),
+                true, false, 400, new BigDecimal("0.1"), 0, 0);
+        em.flush();
+        em.clear();
+
+        perform(leader, kpiUrl(team.getId()) + "?scope=ME")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conversationCount.value").value(1))
+                .andExpect(jsonPath("$.data.conversationCount.prevValue").value(0))
+                .andExpect(jsonPath("$.data.tokensPerSuccess.value").value(400.0))
+                .andExpect(jsonPath("$.data.successRate.value").value(1.0))
+                .andExpect(jsonPath("$.data.savingAmount.value").value(0))
+                .andExpect(jsonPath("$.data.coverage").isEmpty());
+
+        // scope=TEAM은 생략했을 때와 같은 팀 집계다
+        perform(leader, kpiUrl(team.getId()) + "?scope=TEAM")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conversationCount.value").value(4))
+                .andExpect(jsonPath("$.data.coverage.submittedMembers").value(3));
+    }
+
+    @Test
+    @DisplayName("팀원은 scope=ME면 본인 지표를 받고, scope=TEAM이면 403 LEADER_ONLY로 응답한다")
+    void memberScope() throws Exception {
+        perform(member1, kpiUrl(team.getId()) + "?scope=ME")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conversationCount.value").value(2))
+                .andExpect(jsonPath("$.data.coverage").isEmpty());
+
+        perform(member1, kpiUrl(team.getId()) + "?scope=TEAM")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+    }
+
+    @Test
+    @DisplayName("scope 값이 ME·TEAM이 아니면 400 INVALID_REQUEST로 응답한다")
+    void invalidScope() throws Exception {
+        perform(leader, kpiUrl(team.getId()) + "?scope=ALL")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
     }
 
     @Test
@@ -295,6 +335,7 @@ class DashboardControllerTest {
                 .andExpect(jsonPath(params + "[?(@.name == 'unit')].in").value("query"))
                 .andExpect(jsonPath(params + "[?(@.name == 'taskTypes')].in").value("query"))
                 .andExpect(jsonPath(params + "[?(@.name == 'models')].in").value("query"))
+                .andExpect(jsonPath(params + "[?(@.name == 'scope')].in").value("query"))
                 .andExpect(jsonPath(params + "[?(@.name == 'request')]").isEmpty());
     }
 
@@ -308,44 +349,22 @@ class DashboardControllerTest {
     }
 
     private ResultActions perform(User user, String url) throws Exception {
-        return mockMvc.perform(get(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId())));
+        return mockMvc.perform(fixture.get(user, url));
     }
 
     private String kpiUrl(Long teamId) {
         return "/api/v1/teams/" + teamId + "/dashboard/kpis";
     }
 
-    private User saveUser(String name, String email) {
-        User user = User.builder().name(name).email(email).passwordHash("hashed-password").build();
-        em.persist(user);
-        return user;
-    }
-
-    private Upload saveUpload(User uploader) {
-        Upload upload = Upload.builder().team(team).uploader(uploader).fileName("conversations.json")
-                .conversationCount(10).build();
-        em.persist(upload);
-        return upload;
-    }
-
     private void saveConversation(Upload upload, User user, TeamTaskType taskType, String model, LocalDate date,
             boolean success, boolean rework, int tokens, BigDecimal cost, int reviewSec, int reworkSec) {
-        em.persist(Conversation.builder()
-                .team(team).upload(upload).user(user).taskType(taskType)
-                .externalId("kpi-ext-" + (++externalIdSeq)).title("대화").model(model)
-                .startedAt(date.atTime(10, 0)).conversationDate(date)
-                .turnCount(4).estimatedTokens(tokens).estimatedCost(cost)
-                .isSuccess(success).hasRework(rework).reviewTimeSec(reviewSec).reworkTimeSec(reworkSec)
-                .build());
+        fixture.save(fixture.conversation(upload, user, taskType, date)
+                .model(model).estimatedTokens(tokens).estimatedCost(cost)
+                .isSuccess(success).hasRework(rework).reviewTimeSec(reviewSec).reworkTimeSec(reworkSec));
     }
 
     private void saveFeedback(Upload upload, User user, TeamTaskType taskType, LocalDate date, BigDecimal saving) {
-        em.persist(Feedback.builder()
-                .team(team).upload(upload).user(user).taskType(taskType)
-                .feedbackDate(date).type("VAGUE_REQUEST").title("요청이 모호함")
-                .problem("문제").improvement("개선").occurrenceCount(1)
-                .expectedSavingCost(saving)
-                .build());
+        fixture.save(fixture.feedback(upload, user, taskType, date)
+                .title("요청이 모호함").expectedSavingCost(saving));
     }
 }

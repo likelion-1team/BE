@@ -4,20 +4,17 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.babylion.team1.domain.conversation.entity.Conversation;
-import com.babylion.team1.domain.feedback.entity.Feedback;
+import com.babylion.team1.domain.dashboard.DashboardFixture;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -27,7 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.HttpHeaders;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.annotation.Transactional;
@@ -50,6 +47,7 @@ import org.springframework.transaction.annotation.Transactional;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
+@Import(DashboardFixture.class)
 class TaskTypeStatsControllerTest {
 
     @Autowired
@@ -59,7 +57,7 @@ class TaskTypeStatsControllerTest {
     private EntityManager em;
 
     @Autowired
-    private JwtProvider jwtProvider;
+    private DashboardFixture fixture;
 
     private User leader;
     private User member1;
@@ -68,19 +66,17 @@ class TaskTypeStatsControllerTest {
     private TeamTaskType taskTypeA;
     private TeamTaskType taskTypeB;
     private TeamTaskType taskTypeC;
-    private int externalIdSeq;
 
     @BeforeEach
     void setUp() {
         // 테스트도 로컬 DB를 쓰므로, 직접 가입해 둔 계정과 겹치지 않게 실행마다 고유한 이메일을 쓴다
         String suffix = UUID.randomUUID().toString().substring(0, 8);
-        leader = saveUser("팀장", "task-stats-it-leader-" + suffix + "@test.com");
-        member1 = saveUser("김팀원", "task-stats-it-member1-" + suffix + "@test.com");
-        User member2 = saveUser("이팀원", "task-stats-it-member2-" + suffix + "@test.com");
-        outsider = saveUser("외부인", "task-stats-it-outsider-" + suffix + "@test.com");
+        leader = fixture.user("팀장", "task-stats-it-leader-" + suffix + "@test.com");
+        member1 = fixture.user("김팀원", "task-stats-it-member1-" + suffix + "@test.com");
+        User member2 = fixture.user("이팀원", "task-stats-it-member2-" + suffix + "@test.com");
+        outsider = fixture.user("외부인", "task-stats-it-outsider-" + suffix + "@test.com");
 
-        team = Team.builder().name("기획팀").description("설명").createdBy(leader).build();
-        em.persist(team);
+        team = fixture.team("기획팀", leader);
         em.persist(TeamMember.leader(team, leader));
         em.persist(TeamMember.member(team, member1));
         em.persist(TeamMember.member(team, member2));
@@ -89,13 +85,13 @@ class TaskTypeStatsControllerTest {
         settings.updateTarget(LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 20), null, null);
         em.persist(settings);
 
-        taskTypeA = saveTaskType("주간 보고서 작성");
-        taskTypeB = saveTaskType("회의록 정리");
-        taskTypeC = saveTaskType("고객 응대");
-        saveTaskType("대화 없는 업무");
+        taskTypeA = fixture.taskType(team, "주간 보고서 작성");
+        taskTypeB = fixture.taskType(team, "회의록 정리");
+        taskTypeC = fixture.taskType(team, "고객 응대");
+        fixture.taskType(team, "대화 없는 업무");
 
-        Upload upload1 = saveUpload(member1);
-        Upload upload2 = saveUpload(member2);
+        Upload upload1 = fixture.upload(team, member1);
+        Upload upload2 = fixture.upload(team, member2);
 
         saveConversation(upload1, member1, taskTypeA, LocalDate.of(2026, 11, 2), true, false, 1000);
         saveConversation(upload2, member2, taskTypeA, LocalDate.of(2026, 11, 3), true, true, 2000);
@@ -216,52 +212,23 @@ class TaskTypeStatsControllerTest {
     }
 
     private ResultActions perform(User user, String url) throws Exception {
-        return mockMvc.perform(get(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId())));
+        return mockMvc.perform(fixture.get(user, url));
     }
 
     private String url(Long teamId) {
         return "/api/v1/teams/" + teamId + "/dashboard/task-types";
     }
 
-    private User saveUser(String name, String email) {
-        User user = User.builder().name(name).email(email).passwordHash("hashed-password").build();
-        em.persist(user);
-        return user;
-    }
-
-    private TeamTaskType saveTaskType(String name) {
-        TeamTaskType taskType = TeamTaskType.builder().team(team).name(name).successDefinition("성공 정의").build();
-        em.persist(taskType);
-        return taskType;
-    }
-
-    private Upload saveUpload(User uploader) {
-        Upload upload = Upload.builder().team(team).uploader(uploader).fileName("conversations.json")
-                .conversationCount(10).build();
-        em.persist(upload);
-        return upload;
-    }
-
     private void saveConversation(Upload upload, User user, TeamTaskType taskType, LocalDate date,
             boolean success, boolean rework, int tokens) {
-        em.persist(Conversation.builder()
-                .team(team).upload(upload).user(user).taskType(taskType)
-                .externalId("task-stats-ext-" + (++externalIdSeq)).title("대화").model("gpt-4o")
-                .startedAt(date.atTime(10, 0)).conversationDate(date)
-                .turnCount(4).estimatedTokens(tokens)
-                .isSuccess(success).hasRework(rework)
-                .build());
+        fixture.save(fixture.conversation(upload, user, taskType, date)
+                .estimatedTokens(tokens).isSuccess(success).hasRework(rework));
     }
 
     private void saveFeedbacks(Upload upload, User user, TeamTaskType taskType, LocalDate date, String type,
             int count) {
         for (int i = 0; i < count; i++) {
-            em.persist(Feedback.builder()
-                    .team(team).upload(upload).user(user).taskType(taskType)
-                    .feedbackDate(date).type(type).title("피드백").problem("문제").improvement("개선")
-                    .occurrenceCount(1)
-                    .build());
+            fixture.save(fixture.feedback(upload, user, taskType, date).type(type));
         }
     }
 }

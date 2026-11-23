@@ -55,6 +55,9 @@ public enum ErrorCode {
     ANALYSIS_IN_PROGRESS(HttpStatus.CONFLICT, "ANALYSIS_IN_PROGRESS", "이미 분석 중입니다."),
 
     // Feedback
+    NOT_CONVERSATION_OWNER(HttpStatus.FORBIDDEN, "NOT_CONVERSATION_OWNER", "본인 대화만 조회할 수 있습니다."),
+    CONVERSATION_NOT_FOUND(HttpStatus.NOT_FOUND, "CONVERSATION_NOT_FOUND", "대화를 찾을 수 없습니다."),
+    NOT_FEEDBACK_OWNER(HttpStatus.FORBIDDEN, "NOT_FEEDBACK_OWNER", "피드백 대상자만 조회할 수 있습니다."),
     FEEDBACK_NOT_FOUND(HttpStatus.NOT_FOUND, "FEEDBACK_NOT_FOUND", "피드백을 찾을 수 없습니다."),
     FEEDBACK_NOT_SHARED(HttpStatus.BAD_REQUEST, "FEEDBACK_NOT_SHARED", "공유가 허용된 사례만 가이드로 지정할 수 있습니다.");
 

@@ -5,14 +5,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.babylion.team1.domain.conversation.entity.Conversation;
+import com.babylion.team1.domain.dashboard.DashboardFixture;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -23,7 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.HttpHeaders;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +41,7 @@ import org.springframework.transaction.annotation.Transactional;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
+@Import(DashboardFixture.class)
 class TrendControllerTest {
 
     private static final LocalDate TARGET_FROM = LocalDate.of(2026, 11, 2);
@@ -55,7 +55,7 @@ class TrendControllerTest {
     private EntityManager em;
 
     @Autowired
-    private JwtProvider jwtProvider;
+    private DashboardFixture fixture;
 
     private User leader;
     private User member1;
@@ -63,19 +63,17 @@ class TrendControllerTest {
     private Team team;
     private TeamSettings settings;
     private TeamTaskType taskTypeA;
-    private int externalIdSeq;
 
     @BeforeEach
     void setUp() {
         // 테스트도 로컬 DB를 쓰므로, 직접 가입해 둔 계정과 겹치지 않게 실행마다 고유한 이메일을 쓴다
         String suffix = UUID.randomUUID().toString().substring(0, 8);
-        leader = saveUser("팀장", "trend-it-leader-" + suffix + "@test.com");
-        member1 = saveUser("팀원1", "trend-it-member1-" + suffix + "@test.com");
-        User member2 = saveUser("팀원2", "trend-it-member2-" + suffix + "@test.com");
-        outsider = saveUser("외부인", "trend-it-outsider-" + suffix + "@test.com");
+        leader = fixture.user("팀장", "trend-it-leader-" + suffix + "@test.com");
+        member1 = fixture.user("팀원1", "trend-it-member1-" + suffix + "@test.com");
+        User member2 = fixture.user("팀원2", "trend-it-member2-" + suffix + "@test.com");
+        outsider = fixture.user("외부인", "trend-it-outsider-" + suffix + "@test.com");
 
-        team = Team.builder().name("기획팀").description("설명").createdBy(leader).build();
-        em.persist(team);
+        team = fixture.team("기획팀", leader);
         em.persist(TeamMember.leader(team, leader));
         em.persist(TeamMember.member(team, member1));
         em.persist(TeamMember.member(team, member2));
@@ -84,13 +82,11 @@ class TrendControllerTest {
         settings.updateTarget(TARGET_FROM, TARGET_TO, ONBOARDING_START, null);
         em.persist(settings);
 
-        taskTypeA = TeamTaskType.builder().team(team).name("주간 보고서 작성").successDefinition("수정 없이 제출").build();
-        TeamTaskType taskTypeB = TeamTaskType.builder().team(team).name("회의록 정리").successDefinition("바로 공유").build();
-        em.persist(taskTypeA);
-        em.persist(taskTypeB);
+        taskTypeA = fixture.taskType(team, "주간 보고서 작성", "수정 없이 제출");
+        TeamTaskType taskTypeB = fixture.taskType(team, "회의록 정리", "바로 공유");
 
-        Upload upload1 = saveUpload(member1);
-        Upload upload2 = saveUpload(member2);
+        Upload upload1 = fixture.upload(team, member1);
+        Upload upload2 = fixture.upload(team, member2);
 
         LocalDate nov2 = LocalDate.of(2026, 11, 2);
         saveConversation(upload1, member1, taskTypeA, "gpt-4o", nov2, true, false, 1000, "0.5", 0);
@@ -151,6 +147,28 @@ class TrendControllerTest {
                 .andExpect(jsonPath("$.data.points[0].insufficientSample").value(false))
                 .andExpect(jsonPath("$.data.points[2].value").value(1))
                 .andExpect(jsonPath("$.data.points[8].value").value(1));
+    }
+
+    @Test
+    @DisplayName("팀장이 scope=ME로 조회하면 본인 대화만, 팀원이 scope=TEAM이면 403 LEADER_ONLY")
+    void scopeParameter() throws Exception {
+        saveConversation(fixture.upload(team, leader), leader, taskTypeA, "gpt-4o", TARGET_FROM,
+                true, false, 700, "0.1", 0);
+        em.flush();
+        em.clear();
+
+        perform(leader, url(team.getId()) + "?metric=conversationCount&scope=ME")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.points[0].value").value(1))
+                .andExpect(jsonPath("$.data.points[2].value").value(0));
+
+        perform(leader, url(team.getId()) + "?metric=conversationCount&scope=TEAM")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.points[0].value").value(5));
+
+        perform(member1, url(team.getId()) + "?metric=conversationCount&scope=TEAM")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
     }
 
     @Test
@@ -260,35 +278,17 @@ class TrendControllerTest {
     }
 
     private ResultActions perform(User user, String url) throws Exception {
-        return mockMvc.perform(get(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId())));
+        return mockMvc.perform(fixture.get(user, url));
     }
 
     private String url(Long teamId) {
         return "/api/v1/teams/" + teamId + "/dashboard/trends";
     }
 
-    private User saveUser(String name, String email) {
-        User user = User.builder().name(name).email(email).passwordHash("hashed-password").build();
-        em.persist(user);
-        return user;
-    }
-
-    private Upload saveUpload(User uploader) {
-        Upload upload = Upload.builder().team(team).uploader(uploader).fileName("conversations.json")
-                .conversationCount(10).build();
-        em.persist(upload);
-        return upload;
-    }
-
     private void saveConversation(Upload upload, User user, TeamTaskType taskType, String model, LocalDate date,
             boolean success, boolean rework, int tokens, String cost, int reworkSec) {
-        em.persist(Conversation.builder()
-                .team(team).upload(upload).user(user).taskType(taskType)
-                .externalId("trend-ext-" + (++externalIdSeq)).title("대화").model(model)
-                .startedAt(date.atTime(10, 0)).conversationDate(date)
-                .turnCount(4).estimatedTokens(tokens).estimatedCost(new BigDecimal(cost))
-                .isSuccess(success).hasRework(rework).reworkTimeSec(reworkSec)
-                .build());
+        fixture.save(fixture.conversation(upload, user, taskType, date)
+                .model(model).estimatedTokens(tokens).estimatedCost(new BigDecimal(cost))
+                .isSuccess(success).hasRework(rework).reworkTimeSec(reworkSec));
     }
 }
