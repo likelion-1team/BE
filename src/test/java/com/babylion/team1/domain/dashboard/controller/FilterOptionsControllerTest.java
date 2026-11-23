@@ -156,11 +156,11 @@ class FilterOptionsControllerTest {
     }
 
     @Test
-    @DisplayName("토큰 없이 요청하면 401 UNAUTHORIZED로 응답한다")
+    @DisplayName("토큰 없이 요청하면 401 AUTH_REQUIRED로 응답한다")
     void withoutToken() throws Exception {
         mockMvc.perform(get(url(team.getId())))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
     }
 
     private ResultActions perform(User user, String url) throws Exception {

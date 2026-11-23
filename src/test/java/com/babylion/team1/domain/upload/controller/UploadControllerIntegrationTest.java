@@ -20,7 +20,7 @@ import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import jakarta.persistence.EntityManager;
 import java.io.IOException;
 import java.net.http.HttpClient;
@@ -71,7 +71,7 @@ class UploadControllerIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
     @Autowired
-    private JwtProvider jwtProvider;
+    private TestAccessTokens accessTokens;
 
     @Autowired
     private ApplicationContext applicationContext;
@@ -115,7 +115,7 @@ class UploadControllerIntegrationTest {
 
         mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", team.getId())
                         .file(file)
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(uploader.getId())))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(uploader.getId())))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.uploadId").isNumber())
                 .andExpect(jsonPath("$.data.conversations[0].externalId").value(sameTeamId))
@@ -147,7 +147,7 @@ class UploadControllerIntegrationTest {
                         Long.class, team.getId()));
 
         String history = "/api/v1/teams/{teamId}/uploads";
-        String bearer = "Bearer " + jwtProvider.createAccessToken(uploader.getId());
+        String bearer = "Bearer " + accessTokens.create(uploader.getId());
         mockMvc.perform(get(history, team.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.page").value(0))
@@ -167,7 +167,7 @@ class UploadControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.page").value(1))
                 .andExpect(jsonPath("$.data.totalElements").value(2));
         mockMvc.perform(get(history, otherTeam.getId()).header(HttpHeaders.AUTHORIZATION,
-                        "Bearer " + jwtProvider.createAccessToken(otherMember.getId())))
+                        "Bearer " + accessTokens.create(otherMember.getId())))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
     }
@@ -186,12 +186,12 @@ class UploadControllerIntegrationTest {
         entityManager.persist(upload);
 
         String path = "/api/v1/uploads/{uploadId}";
-        String bearer = "Bearer " + jwtProvider.createAccessToken(uploader.getId());
+        String bearer = "Bearer " + accessTokens.create(uploader.getId());
 
         mockMvc.perform(get(path, upload.getId()))
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION,
-                        "Bearer " + jwtProvider.createAccessToken(other.getId())))
+                        "Bearer " + accessTokens.create(other.getId())))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("NOT_UPLOADER"));
         mockMvc.perform(get(path, Long.MAX_VALUE).header(HttpHeaders.AUTHORIZATION, bearer))
@@ -273,7 +273,7 @@ class UploadControllerIntegrationTest {
                     "author":{"role":"assistant"},"content":{"parts":["world"]},"metadata":{"model_slug":"gpt-4o"},"create_time":%d}}
                 }}]
                 """.formatted(externalId, epoch, epoch, epoch + 1);
-        String bearer = "Bearer " + jwtProvider.createAccessToken(userId);
+        String bearer = "Bearer " + accessTokens.create(userId);
         TestTransaction.flagForCommit();
         TestTransaction.end();
 

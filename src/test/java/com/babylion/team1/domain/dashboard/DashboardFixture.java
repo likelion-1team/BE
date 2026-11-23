@@ -6,7 +6,7 @@ import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -25,12 +25,12 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 public class DashboardFixture {
 
     private final EntityManager em;
-    private final JwtProvider jwtProvider;
+    private final TestAccessTokens accessTokens;
     private final AtomicInteger externalIdSeq = new AtomicInteger();
 
-    public DashboardFixture(EntityManager em, JwtProvider jwtProvider) {
+    public DashboardFixture(EntityManager em, TestAccessTokens accessTokens) {
         this.em = em;
-        this.jwtProvider = jwtProvider;
+        this.accessTokens = accessTokens;
     }
 
     public User user(String name, String email) {
@@ -93,7 +93,7 @@ public class DashboardFixture {
     /** user로 로그인한 GET 요청 */
     public MockHttpServletRequestBuilder get(User user, String url) {
         return MockMvcRequestBuilders.get(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId()));
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(user.getId()));
     }
 
     private <T> T persist(T entity) {

@@ -15,7 +15,7 @@ import com.babylion.team1.domain.team.repository.TeamMemberRepository;
 import com.babylion.team1.domain.team.repository.TeamRepository;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import com.jayway.jsonpath.JsonPath;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -53,7 +53,7 @@ class TeamMemberAddControllerIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
     @Autowired
-    private JwtProvider jwtProvider;
+    private TestAccessTokens accessTokens;
     @Autowired
     private TeamRepository teamRepository;
     @Autowired
@@ -169,7 +169,7 @@ class TeamMemberAddControllerIntegrationTest {
         String body = emailBody("member@example.com");
         mockMvc.perform(request(1L, body))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
         mockMvc.perform(request(1L, body).header(HttpHeaders.AUTHORIZATION, "Bearer invalid"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
@@ -246,7 +246,7 @@ class TeamMemberAddControllerIntegrationTest {
     }
 
     private String bearer(User user) {
-        return "Bearer " + jwtProvider.createAccessToken(user.getId());
+        return "Bearer " + accessTokens.create(user.getId());
     }
 
     private record ConcurrentFixture(Team team, User leader, User invitee) {}

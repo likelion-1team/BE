@@ -23,7 +23,7 @@ import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
@@ -65,7 +65,7 @@ class SharedFeedbackControllerIntegrationTest {
     @Autowired
     private EntityManager entityManager;
     @Autowired
-    private JwtProvider jwtProvider;
+    private TestAccessTokens accessTokens;
     @Autowired
     private JdbcTemplate jdbc;
 
@@ -440,7 +440,7 @@ class SharedFeedbackControllerIntegrationTest {
         Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "반응", null);
         entityManager.flush();
         Long id = feedback.getId();
-        String ownerToken = "Bearer " + jwtProvider.createAccessToken(fixture.member().getId());
+        String ownerToken = "Bearer " + accessTokens.create(fixture.member().getId());
 
         recordReaction(id, ownerToken, """
                 {"reaction":"NOT_APPLICABLE","reason":"이미 지정했음"}
@@ -478,8 +478,8 @@ class SharedFeedbackControllerIntegrationTest {
         Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "반응 권한", null);
         entityManager.flush();
         Long id = feedback.getId();
-        String ownerToken = "Bearer " + jwtProvider.createAccessToken(fixture.member().getId());
-        String leaderToken = "Bearer " + jwtProvider.createAccessToken(fixture.leader().getId());
+        String ownerToken = "Bearer " + accessTokens.create(fixture.member().getId());
+        String leaderToken = "Bearer " + accessTokens.create(fixture.leader().getId());
         String validBody = "{\"reaction\":\"HELPFUL\"}";
 
         for (String body : List.of("{}", "{\"reaction\":\"UNKNOWN\"}",
@@ -578,14 +578,14 @@ class SharedFeedbackControllerIntegrationTest {
 
     private ResultActions share(Long feedbackId, User user, String body) throws Exception {
         return mockMvc.perform(patch(SHARE, feedbackId)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId()))
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(user.getId()))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));
     }
 
     private ResultActions request(String path, Long teamId, User user, String... params) throws Exception {
         MockHttpServletRequestBuilder request = get(path, teamId)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId()));
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(user.getId()));
         for (int index = 0; index < params.length; index += 2) {
             request.param(params[index], params[index + 1]);
         }

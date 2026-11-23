@@ -19,7 +19,7 @@ import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
@@ -66,7 +66,7 @@ class FeedbackGuideControllerIntegrationTest {
     @Autowired
     private FeedbackRepository feedbackRepository;
     @Autowired
-    private JwtProvider jwtProvider;
+    private TestAccessTokens accessTokens;
     @Autowired
     private TransactionTemplate transactions;
     @Autowired
@@ -134,7 +134,7 @@ class FeedbackGuideControllerIntegrationTest {
                 .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
         mockMvc.perform(put(GUIDE, fixture.feedbackId()))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
         mockMvc.perform(put(GUIDE, fixture.feedbackId()).header(HttpHeaders.AUTHORIZATION, "Bearer invalid"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
@@ -225,7 +225,7 @@ class FeedbackGuideControllerIntegrationTest {
                 .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
         mockMvc.perform(delete(GUIDE, fixture.feedbackId()))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
 
         assertThat(feedbackRepository.findById(fixture.feedbackId()).orElseThrow().getIsGuide()).isTrue();
     }
@@ -424,7 +424,7 @@ class FeedbackGuideControllerIntegrationTest {
     }
 
     private String bearer(Long userId) {
-        return "Bearer " + jwtProvider.createAccessToken(userId);
+        return "Bearer " + accessTokens.create(userId);
     }
 
     private record Fixture(Long teamId, Long leaderId, Long ownerId, Long feedbackId) {}

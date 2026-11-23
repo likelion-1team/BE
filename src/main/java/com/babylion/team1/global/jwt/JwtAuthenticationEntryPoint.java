@@ -30,7 +30,7 @@ public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
                          AuthenticationException authException) throws IOException {
         ErrorCode errorCode = request.getAttribute(JwtAuthenticationFilter.ERROR_CODE_ATTRIBUTE) instanceof ErrorCode code
                 ? code
-                : ErrorCode.UNAUTHORIZED;
+                : ErrorCode.AUTH_REQUIRED;
         log.warn("[Authentication] {} - {} {}", errorCode.getCode(), request.getMethod(), request.getRequestURI());
 
         response.setStatus(errorCode.getStatus().value());
