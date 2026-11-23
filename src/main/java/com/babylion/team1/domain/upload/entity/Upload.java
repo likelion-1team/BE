@@ -5,6 +5,7 @@ import com.babylion.team1.domain.user.entity.User;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -67,16 +68,25 @@ public class Upload {
 	@Column(name = "uploaded_at", nullable = false, updatable = false)
 	private LocalDateTime uploadedAt;
 
+	@Column(name = "target_from", updatable = false)
+	private LocalDate targetFrom;
+
+	@Column(name = "target_to", updatable = false)
+	private LocalDate targetTo;
+
 	/** DONE 전 NULL */
 	@Column(name = "analyzed_at")
 	private LocalDateTime analyzedAt;
 
 	@Builder
-	private Upload(Team team, User uploader, String fileName, Integer conversationCount, Integer duplicateCount) {
+	private Upload(Team team, User uploader, String fileName, Integer conversationCount, Integer duplicateCount,
+	               LocalDate targetFrom, LocalDate targetTo) {
 		this.team = team;
 		this.uploader = uploader;
 		this.fileName = fileName;
 		this.conversationCount = conversationCount;
+		this.targetFrom = targetFrom;
+		this.targetTo = targetTo;
 		if (duplicateCount != null) {
 			this.duplicateCount = duplicateCount;
 		}

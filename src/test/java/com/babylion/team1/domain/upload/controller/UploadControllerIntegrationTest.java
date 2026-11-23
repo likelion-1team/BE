@@ -116,6 +116,41 @@ class UploadControllerIntegrationTest {
         assertThat(jdbc.queryForObject(
                 "select count(*) from conversations where upload_id = ?", Long.class, uploadId)).isZero();
         assertThat(Files.readString(uploadDirectory.resolve(uploadId + ".export"))).isEqualTo(original);
+
+        User otherMember = User.builder().name("다른 팀원").email("history-" + UUID.randomUUID() + "@test.com")
+                .passwordHash("test-password-hash").build();
+        entityManager.persist(otherMember);
+        entityManager.persist(TeamMember.member(team, otherMember));
+        entityManager.persist(Upload.builder().team(team).uploader(otherMember).fileName("other.json")
+                .conversationCount(1).build());
+        jdbc.update("update uploads set uploaded_at = ? where id = ?", TARGET_DATE.minusDays(1).atStartOfDay(),
+                jdbc.queryForObject("select id from uploads where team_id = ? and file_name = 'previous.json'",
+                        Long.class, team.getId()));
+
+        String history = "/api/v1/teams/{teamId}/uploads";
+        String bearer = "Bearer " + jwtProvider.createAccessToken(uploader.getId());
+        mockMvc.perform(get(history, team.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.page").value(0))
+                .andExpect(jsonPath("$.data.size").value(10))
+                .andExpect(jsonPath("$.data.totalElements").value(2))
+                .andExpect(jsonPath("$.data.content[0].uploadId").value((int) uploadId))
+                .andExpect(jsonPath("$.data.content[0].analyzedCount").value(0))
+                .andExpect(jsonPath("$.data.content[0].period.from").value(TARGET_DATE.toString()))
+                .andExpect(jsonPath("$.data.content[0].period.to").value(TARGET_DATE.toString()))
+                .andExpect(jsonPath("$.data.content[0].status").value("UPLOADED"))
+                .andExpect(jsonPath("$.data.content[1].period").value(nullValue()));
+        mockMvc.perform(get(history, team.getId()).param("page", "1").param("size", "1")
+                        .header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content.length()").value(1))
+                .andExpect(jsonPath("$.data.content[0].period").value(nullValue()))
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.totalElements").value(2));
+        mockMvc.perform(get(history, otherTeam.getId()).header(HttpHeaders.AUTHORIZATION,
+                        "Bearer " + jwtProvider.createAccessToken(otherMember.getId())))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
     }
 
     @Test
@@ -207,6 +242,9 @@ class UploadControllerIntegrationTest {
                             .header(HttpHeaders.AUTHORIZATION, bearer))
                     .andExpect(status().isCreated());
             Long uploadId = jdbc.queryForObject("select id from uploads where team_id = ?", Long.class, teamId);
+            jdbc.update("update team_settings set target_from = ?, target_to = ? where team_id = ?",
+                    TARGET_DATE.plusDays(1), TARGET_DATE.plusDays(1), teamId);
+            Files.delete(uploadDirectory.resolve(uploadId + ".period"));
 
             mockMvc.perform(post("/api/v1/uploads/{uploadId}/analyses", uploadId)
                             .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
@@ -230,6 +268,13 @@ class UploadControllerIntegrationTest {
             assertThat(state).as("fail_reason=%s", jdbc.queryForObject(
                     "select fail_reason from uploads where id = ?", String.class, uploadId)).isEqualTo("DONE");
             assertThat(original).doesNotExist();
+            mockMvc.perform(get("/api/v1/teams/{teamId}/uploads", teamId)
+                            .header(HttpHeaders.AUTHORIZATION, bearer))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.content[0].status").value("DONE"))
+                    .andExpect(jsonPath("$.data.content[0].analyzedCount").value(1))
+                    .andExpect(jsonPath("$.data.content[0].period.from").value(TARGET_DATE.toString()))
+                    .andExpect(jsonPath("$.data.content[0].period.to").value(TARGET_DATE.toString()));
             mockMvc.perform(get("/api/v1/uploads/{uploadId}", uploadId)
                             .header(HttpHeaders.AUTHORIZATION, bearer))
                     .andExpect(status().isOk())

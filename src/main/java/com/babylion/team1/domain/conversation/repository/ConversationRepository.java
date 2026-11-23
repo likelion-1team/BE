@@ -15,6 +15,20 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
 
     long countByUploadId(Long uploadId);
 
+    @Query("""
+            select c.upload.id as uploadId, count(c) as analyzedCount
+            from Conversation c
+            where c.upload.id in :uploadIds
+            group by c.upload.id
+            """)
+    List<UploadConversationCount> countByUploadIds(@Param("uploadIds") Collection<Long> uploadIds);
+
+    interface UploadConversationCount {
+        Long getUploadId();
+
+        long getAnalyzedCount();
+    }
+
     @Query("select c.externalId from Conversation c where c.team.id = :teamId and c.externalId in :externalIds")
     List<String> findExistingExternalIds(@Param("teamId") Long teamId,
                                          @Param("externalIds") Collection<String> externalIds);

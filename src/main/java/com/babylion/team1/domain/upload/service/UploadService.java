@@ -60,6 +60,8 @@ public class UploadService {
                     .fileName(fileName)
                     .conversationCount(candidates.size())
                     .duplicateCount(duplicates.size())
+                    .targetFrom(settings.getTargetFrom())
+                    .targetTo(settings.getTargetTo())
                     .build());
             Long uploadId = upload.getId();
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {

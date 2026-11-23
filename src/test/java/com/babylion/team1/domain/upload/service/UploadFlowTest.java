@@ -97,7 +97,7 @@ class UploadFlowTest {
         storage = new UploadFileStorage(directory.toString());
         UploadService service = new UploadService(members, settingsRepository, conversations, uploads,
                 new ChatGptExportReader(DataSize.ofBytes(512)), storage);
-        mvc = MockMvcBuilders.standaloneSetup(new UploadController(service))
+        mvc = MockMvcBuilders.standaloneSetup(new UploadController(service, mock(UploadHistoryService.class)))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setCustomArgumentResolvers(new TestPrincipalResolver())
                 .build();

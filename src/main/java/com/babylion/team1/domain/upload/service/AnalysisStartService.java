@@ -66,7 +66,9 @@ public class AnalysisStartService {
             }
         }
 
-        var period = storage.readTargetPeriod(uploadId).orElseGet(() -> settings.findByTeamId(teamId)
+        var period = upload.getTargetFrom() != null && upload.getTargetTo() != null
+                ? new UploadFileStorage.TargetPeriod(upload.getTargetFrom(), upload.getTargetTo())
+                : storage.readTargetPeriod(uploadId).orElseGet(() -> settings.findByTeamId(teamId)
                 .filter(teamSettings -> teamSettings.isTargetSet())
                 .map(teamSettings -> new UploadFileStorage.TargetPeriod(
                         teamSettings.getTargetFrom(), teamSettings.getTargetTo()))
