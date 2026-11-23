@@ -47,18 +47,29 @@ class AnalysisFeedbackRules {
     }
 
     enum Type {
-        MISSING_CONTEXT(FeedbackType.MISSING_CONTEXT, "초반에 수정 요청이 반복됐어요.", "첫 질문에 목적, 제약과 원하는 결과 형식을 적어보세요."),
-        LONG_CONVERSATION(FeedbackType.LONG_CONVERSATION, "대화의 맥락이 길어졌어요.", "핵심 내용을 요약한 뒤 새 대화에서 이어가 보세요."),
-        OVERSPEC_MODEL(FeedbackType.OVERSPEC_MODEL, "짧은 작업에 고비용 모델을 사용했어요.", "같은 작업을 저비용 모델로 먼저 시도해 보세요.");
+        MISSING_CONTEXT(FeedbackType.MISSING_CONTEXT, "초반에 수정 요청이 반복됐어요.",
+                "첫 질문에 목적, 제약과 원하는 결과 형식을 적어보세요.",
+                "목표는 [목표]이고 대상은 [대상]입니다. [배경과 제약]을 반영해 [결과 형식]으로 작성해 주세요. "
+                        + "필요한 정보가 빠져 있으면 먼저 질문해 주세요."),
+        LONG_CONVERSATION(FeedbackType.LONG_CONVERSATION, "대화의 맥락이 길어졌어요.",
+                "핵심 내용을 요약한 뒤 새 대화에서 이어가 보세요.",
+                "아래 요약을 바탕으로 이어서 작업해 주세요. 목표: [목표], 확정된 조건: [조건], "
+                        + "현재 결과: [요약], 남은 작업: [요청]. 결과는 [형식]으로 작성해 주세요."),
+        OVERSPEC_MODEL(FeedbackType.OVERSPEC_MODEL, "짧은 작업에 고비용 모델을 사용했어요.",
+                "같은 작업을 저비용 모델로 먼저 시도해 보세요.",
+                "다음 입력에서 [필요한 정보]만 찾아 [형식]으로 간단히 정리해 주세요. "
+                        + "입력에 없는 내용은 추측하지 말고 ‘정보 없음’으로 표시해 주세요. 입력: [원문]");
 
         final String title;
         final String problem;
         final String improvement;
+        final String exampleAfter;
 
-        Type(FeedbackType feedbackType, String problem, String improvement) {
+        Type(FeedbackType feedbackType, String problem, String improvement, String exampleAfter) {
             this.title = feedbackType.getLabel();
             this.problem = problem;
             this.improvement = improvement;
+            this.exampleAfter = exampleAfter;
         }
     }
 
