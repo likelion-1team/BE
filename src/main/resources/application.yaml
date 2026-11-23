@@ -3,6 +3,10 @@ spring:
     name: team1
   config:
     import: optional:application-local.yaml
+  servlet:
+    multipart:
+      max-file-size: ${UPLOAD_MAX_FILE_SIZE:50MB}
+      max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:51MB}
   jpa:
     hibernate:
       ddl-auto: update
@@ -13,5 +17,34 @@ spring:
 server:
   port: 8080
 jwt:
+  secret: ${JWT_SECRET}
   access-token-expiration: 1800000
   refresh-token-expiration: 1209600000
+
+app:
+  upload:
+    directory: ${UPLOAD_DIRECTORY:${java.io.tmpdir}/babylion-team1/uploads}
+    max-expanded-size: ${UPLOAD_MAX_EXPANDED_SIZE:100MB}
+  analysis:
+    rework-keywords: ${ANALYSIS_REWORK_KEYWORDS:다시,아니,그게 아니라,수정해,틀렸,말고,again,not what}
+    usd-krw-rate: ${USD_KRW_RATE:0}
+    gemini-api-key: ${GEMINI_API_KEY:}
+    gemini-model: ${GEMINI_MODEL:gemini-2.5-flash}
+    low-tier-model: gpt-4o-mini
+    pricing:
+      gpt-4o:
+        input: 2.50
+        output: 10.00
+        tier: high
+      gpt-4o-mini:
+        input: 0.15
+        output: 0.60
+        tier: low
+      gpt-4o-2024-08-06:
+        input: 2.50
+        output: 10.00
+        tier: high
+      gpt-4o-mini-2024-07-18:
+        input: 0.15
+        output: 0.60
+        tier: low

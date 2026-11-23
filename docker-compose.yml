@@ -1,0 +1,18 @@
+services:
+  mysql:
+    image: mysql:8.4
+    platform: linux/arm64
+    container_name: 1team-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root1234
+      MYSQL_DATABASE: babylion
+      MYSQL_USER: 1team
+      MYSQL_PASSWORD: 1team1234
+    ports:
+      - "3306:3306"
+    command: --innodb-buffer-pool-size=128M --innodb-log-buffer-size=8M --max-connections=50
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+volumes:
+  mysql-data:

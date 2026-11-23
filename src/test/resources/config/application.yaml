@@ -1,0 +1,12 @@
+# 테스트 전용 설정. main의 application.yaml에 덧씌워진다.
+jwt:
+  # 테스트 전용 키. 실제 환경에서 사용하지 않는다.
+  secret: test-only-jwt-secret-key-not-for-real-use-0123456789
+
+spring:
+  datasource:
+    hikari:
+      # 테스트는 설정이 다른 클래스마다 컨텍스트(=커넥션 풀)가 따로 생기고 끝까지 캐시된다.
+      # 기본값(풀마다 10개)이면 컨텍스트 5개만 돼도 MySQL max-connections(50)를 넘어 Too many connections로 실패한다.
+      maximum-pool-size: 3
+      minimum-idle: 1
