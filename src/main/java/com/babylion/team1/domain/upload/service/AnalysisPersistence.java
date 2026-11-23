@@ -118,7 +118,7 @@ class AnalysisPersistence {
         var first = matches.get(0);
         var text = first.suggestion().improved();
         if (text == null) {
-            text = new FeedbackText(type.improvement, null);
+            text = new FeedbackText(type.improvement, type.exampleAfter);
         }
         var feedback = feedbacks.save(Feedback.builder().team(upload.getTeam()).upload(upload)
                 .user(upload.getUploader()).taskType(first.conversation().getTaskType()).feedbackDate(key.date())

@@ -2,6 +2,11 @@ package com.babylion.team1.domain.upload.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -17,14 +22,24 @@ import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.global.jwt.JwtProvider;
 import jakarta.persistence.EntityManager;
+import java.io.IOException;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.context.ApplicationContext;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -37,6 +52,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -56,6 +72,9 @@ class UploadControllerIntegrationTest {
     private JdbcTemplate jdbc;
     @Autowired
     private JwtProvider jwtProvider;
+
+    @Autowired
+    private ApplicationContext applicationContext;
 
     @DynamicPropertySource
     static void configureStorage(DynamicPropertyRegistry properties) {
@@ -205,8 +224,31 @@ class UploadControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
     }
 
-    @Test
-    void analyzesUploadedConversationAndCommitsDone() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void analyzesUploadedConversationAndReturnsFallbackOrGeneratedPrompt(boolean geminiSucceeds) throws Exception {
+        var gemini = applicationContext.getBean("geminiFeedbackClient");
+        var originalHttp = ReflectionTestUtils.getField(gemini, "http");
+        var originalKey = ReflectionTestUtils.getField(gemini, "apiKey");
+        var http = mock(HttpClient.class);
+        String generated = "Gemini가 생성한 개선 프롬프트";
+        if (geminiSucceeds) {
+            @SuppressWarnings("unchecked")
+            HttpResponse<String> response = mock(HttpResponse.class);
+            when(response.statusCode()).thenReturn(200);
+            var mapper = new ObjectMapper();
+            String generatedJson = mapper.writeValueAsString(Map.of(
+                    "improvement", "개선 방안", "exampleAfter", generated));
+            var part = Map.of("text", generatedJson);
+            var candidate = Map.of("content", Map.of("parts", List.of(part)));
+            when(response.body()).thenReturn(mapper.writeValueAsString(
+                    Map.of("candidates", List.of(candidate))));
+            when(http.send(any(HttpRequest.class), org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+                    .thenReturn(response);
+        } else {
+            when(http.send(any(HttpRequest.class), org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+                    .thenThrow(new IOException("simulated Gemini transport failure"));
+        }
         User uploader = User.builder().name("분석 테스트").email("analysis-it-" + UUID.randomUUID() + "@test.com")
                 .passwordHash("test-password-hash").build();
         entityManager.persist(uploader);
@@ -228,7 +270,7 @@ class UploadControllerIntegrationTest {
                   "question":{"parent":null,"children":["answer"],"message":{
                     "author":{"role":"user"},"content":{"parts":["hello"]},"create_time":%d}},
                   "answer":{"parent":"question","children":[],"message":{
-                    "author":{"role":"assistant"},"content":{"parts":["world"]},"create_time":%d}}
+                    "author":{"role":"assistant"},"content":{"parts":["world"]},"metadata":{"model_slug":"gpt-4o"},"create_time":%d}}
                 }}]
                 """.formatted(externalId, epoch, epoch, epoch + 1);
         String bearer = "Bearer " + jwtProvider.createAccessToken(userId);
@@ -236,6 +278,8 @@ class UploadControllerIntegrationTest {
         TestTransaction.end();
 
         try {
+            ReflectionTestUtils.setField(gemini, "http", http);
+            ReflectionTestUtils.setField(gemini, "apiKey", "local-test-key");
             mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
                             .file(new MockMultipartFile("file", "conversations.json", "application/json",
                                     export.getBytes(StandardCharsets.UTF_8)))
@@ -293,6 +337,18 @@ class UploadControllerIntegrationTest {
                     select m.content from messages m join conversations c on c.id = m.conversation_id
                     where c.upload_id = ? order by m.idx
                     """, String.class, uploadId)).containsExactly("hello", "world");
+            Long feedbackId = jdbc.queryForObject("select id from feedbacks where upload_id = ?",
+                    Long.class, uploadId);
+            String expected = geminiSucceeds ? generated
+                    : "다음 입력에서 [필요한 정보]만 찾아 [형식]으로 간단히 정리해 주세요. "
+                    + "입력에 없는 내용은 추측하지 말고 ‘정보 없음’으로 표시해 주세요. 입력: [원문]";
+            mockMvc.perform(get("/api/v1/feedbacks/{feedbackId}", feedbackId)
+                            .header(HttpHeaders.AUTHORIZATION, bearer))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.example.before").value("hello"))
+                    .andExpect(jsonPath("$.data.example.after").value(expected));
+            verify(http, times(geminiSucceeds ? 1 : 2)).send(any(HttpRequest.class),
+                    org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any());
             mockMvc.perform(post("/api/v1/uploads/{uploadId}/analyses", uploadId)
                             .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
                             .content("""
@@ -301,6 +357,11 @@ class UploadControllerIntegrationTest {
                     .andExpect(status().isConflict())
                     .andExpect(jsonPath("$.code").value("ANALYSIS_ALREADY_COMPLETED"));
         } finally {
+            ReflectionTestUtils.setField(gemini, "http", originalHttp);
+            ReflectionTestUtils.setField(gemini, "apiKey", originalKey);
+            jdbc.update("delete from feedback_evidences where feedback_id in (select id from feedbacks where team_id = ?)",
+                    teamId);
+            jdbc.update("delete from feedbacks where team_id = ?", teamId);
             jdbc.update("delete from messages where conversation_id in (select id from conversations where team_id = ?)",
                     teamId);
             jdbc.update("delete from conversations where team_id = ?", teamId);
