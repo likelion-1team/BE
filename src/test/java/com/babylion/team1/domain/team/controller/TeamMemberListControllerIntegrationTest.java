@@ -219,6 +219,81 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void listsEachMemberOnceUsingOnlyTheCurrentSettings() throws Exception {
+        TeamFixture fixture = createTeam(saveUser("팀장"));
+        User member = addMember(fixture, "이전 기간에만 제출한 팀원");
+        TeamSettings initial = saveInitialSettings(fixture.team());
+        TeamSettings previous = saveNextSettings(initial, FROM, TO, null);
+        saveNextSettings(previous, FROM.plusMonths(1), TO.plusMonths(1), null);
+
+        saveConversation(fixture, fixture.leader(), FROM.plusMonths(1), UploadStatus.DONE);
+        saveConversation(fixture, member, FROM, UploadStatus.DONE);
+
+        listMembers(fixture.team().getId(), fixture.leader())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[0].userId").value(fixture.leader().getId()))
+                .andExpect(jsonPath("$.data[0].submitted").value(true))
+                .andExpect(jsonPath("$.data[1].userId").value(member.getId()))
+                .andExpect(jsonPath("$.data[1].submitted").value(false));
+    }
+
+    @Test
+    void summarizesSubmissionsWithTheLatestTargetCount() throws Exception {
+        TeamFixture fixture = createTeam(saveUser("팀장"));
+        addMember(fixture, "미제출 팀원");
+        TeamSettings initial = saveInitialSettings(fixture.team());
+        TeamSettings previous = saveNextSettings(initial, FROM, TO, 120);
+        saveNextSettings(previous, FROM, TO, 200);
+
+        saveConversation(fixture, fixture.leader(), FROM, UploadStatus.DONE);
+
+        submissions(fixture.team().getId(), fixture.leader())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.submittedMembers").value(1))
+                .andExpect(jsonPath("$.data.totalMembers").value(2))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(1))
+                .andExpect(jsonPath("$.data.targetCount").value(200));
+    }
+
+    @Test
+    void countsSubmissionsOnceWhenSettingsPeriodsOverlap() throws Exception {
+        TeamFixture fixture = createTeam(saveUser("팀장"));
+        User member = addMember(fixture, "제출한 팀원");
+        TeamSettings initial = saveInitialSettings(fixture.team());
+        TeamSettings previous = saveNextSettings(initial, FROM, TO, null);
+        saveNextSettings(previous, FROM.plusDays(5), TO, null);
+
+        saveConversation(fixture, fixture.leader(), FROM, UploadStatus.DONE);
+        saveConversation(fixture, member, TO, UploadStatus.DONE);
+        saveConversation(fixture, member, TO.minusDays(1), UploadStatus.DONE);
+
+        submissions(fixture.team().getId(), fixture.leader())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.submittedMembers").value(1))
+                .andExpect(jsonPath("$.data.totalMembers").value(2))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(2))
+                .andExpect(jsonPath("$.data.targetCount").value(nullValue()));
+    }
+
+    @Test
+    void excludesSubmissionsThatOnlyMatchAPreviousPeriod() throws Exception {
+        TeamFixture fixture = createTeam(saveUser("팀장"));
+        User member = addMember(fixture, "이전 기간에만 제출한 팀원");
+        TeamSettings initial = saveInitialSettings(fixture.team());
+        TeamSettings previous = saveNextSettings(initial, FROM, TO, null);
+        saveNextSettings(previous, FROM.plusMonths(1), TO.plusMonths(1), null);
+
+        saveConversation(fixture, member, FROM, UploadStatus.DONE);
+
+        submissions(fixture.team().getId(), fixture.leader())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.submittedMembers").value(0))
+                .andExpect(jsonPath("$.data.totalMembers").value(2))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(0));
+    }
+
     private ResultActions submissions(Long teamId, User user) throws Exception {
         return mockMvc.perform(get("/api/v1/teams/{teamId}/submissions", teamId)
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(user.getId())));
@@ -250,6 +325,20 @@ class TeamMemberListControllerIntegrationTest {
         TeamSettings settings = TeamSettings.createDefault(team);
         settings.updateTarget(FROM, TO, FROM.plusDays(10), null);
         entityManager.persist(settings);
+    }
+
+    /** 팀 생성 시 저장되는 기간 미설정 상태의 첫 버전 */
+    private TeamSettings saveInitialSettings(Team team) {
+        TeamSettings settings = TeamSettings.createDefault(team);
+        entityManager.persist(settings);
+        return settings;
+    }
+
+    /** 기준을 다시 저장한 상태. 이전 버전은 현재 기준에서 내려간다 */
+    private TeamSettings saveNextSettings(TeamSettings previous, LocalDate from, LocalDate to, Integer targetCount) {
+        TeamSettings next = previous.nextVersion(from, to, from, targetCount);
+        entityManager.persist(next);
+        return next;
     }
 
     private void saveConversation(TeamFixture fixture, User user, LocalDate date, UploadStatus uploadStatus) {
