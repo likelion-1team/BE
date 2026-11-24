@@ -9,7 +9,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -52,7 +56,11 @@ class ChatGptExportReader {
     }
 
     List<ExportConversation> read(Path file, boolean zipped, LocalDate from, LocalDate to) {
-        return readFile(file, zipped, input -> readJson(input, from, to));
+        return readFile(file, zipped, input -> readJson(input, from, to, false));
+    }
+
+    List<ExportConversation> readCandidates(Path file, boolean zipped, LocalDate from, LocalDate to) {
+        return readFile(file, zipped, input -> readJson(input, from, to, true));
     }
 
     Map<String, JsonNode> readSelected(Path file, boolean zipped, Set<String> selectedIds) {
@@ -123,7 +131,7 @@ class ChatGptExportReader {
         }
     }
 
-    private List<ExportConversation> readJson(InputStream input, LocalDate from, LocalDate to) {
+    private List<ExportConversation> readJson(InputStream input, LocalDate from, LocalDate to, boolean hashContent) {
         Map<String, ExportConversation> candidates = new LinkedHashMap<>();
         try (JsonParser parser = jsonFactory.createParser(ObjectReadContext.empty(), input)) {
             if (parser.nextToken() != START_ARRAY) {
@@ -133,7 +141,7 @@ class ChatGptExportReader {
                 if (!parser.hasToken(START_OBJECT)) {
                     throw invalidFormat();
                 }
-                ExportConversation conversation = readConversation(parser);
+                ExportConversation conversation = readConversation(parser, hashContent);
                 LocalDate date = conversation.startedAt().toLocalDate();
                 if (!date.isBefore(from) && !date.isAfter(to)) {
                     candidates.putIfAbsent(conversation.externalId(), conversation);
@@ -146,12 +154,14 @@ class ChatGptExportReader {
         return List.copyOf(candidates.values());
     }
 
-    private ExportConversation readConversation(JsonParser parser) {
+    private ExportConversation readConversation(JsonParser parser, boolean hashContent) {
         String id = null;
         String conversationId = null;
         String title = null;
         OffsetDateTime startedAt = null;
         boolean hasMapping = false;
+        JsonNode mapping = null;
+        String currentNode = null;
         while (parser.nextToken() != END_OBJECT) {
             if (!parser.hasToken(PROPERTY_NAME)) {
                 throw invalidFormat();
@@ -163,9 +173,20 @@ class ChatGptExportReader {
                 case "conversation_id" -> conversationId = readText(parser);
                 case "title" -> title = readText(parser);
                 case "create_time" -> startedAt = readStartedAt(parser);
+                case "current_node" -> {
+                    if (hashContent && parser.hasToken(VALUE_STRING)) {
+                        currentNode = parser.getString();
+                    }
+                    parser.skipChildren();
+                }
                 case "mapping" -> {
                     hasMapping = parser.hasToken(START_OBJECT);
-                    parser.skipChildren();
+                    if (hashContent && hasMapping) {
+                        mapping = mapper.reader().without(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                                .readTree(parser);
+                    } else {
+                        parser.skipChildren();
+                    }
                 }
                 default -> parser.skipChildren();
             }
@@ -175,7 +196,36 @@ class ChatGptExportReader {
                 || startedAt == null || !hasMapping) {
             throw invalidFormat();
         }
-        return new ExportConversation(externalId, title, startedAt);
+        if (!hashContent) {
+            return new ExportConversation(externalId, title, startedAt);
+        }
+
+        var conversation = mapper.createObjectNode();
+        conversation.set("mapping", mapping);
+        conversation.put("current_node", currentNode);
+        List<ChatGptConversationBranch.Turn> turns;
+        try {
+            turns = ChatGptConversationBranch.restore(conversation);
+        } catch (CustomException e) {
+            turns = List.of();
+        }
+        String validationCode = turns.isEmpty() ? "INVALID_FILE_FORMAT" : null;
+        return new ExportConversation(externalId, title, startedAt, contentHash(turns), validationCode);
+    }
+
+    private String contentHash(List<ChatGptConversationBranch.Turn> turns) {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+        for (var turn : turns) {
+            byte[] content = turn.content().getBytes(StandardCharsets.UTF_8);
+            digest.update((turn.role().name() + ":" + content.length + ":").getBytes(StandardCharsets.UTF_8));
+            digest.update(content);
+        }
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     private String readText(JsonParser parser) {
@@ -208,7 +258,11 @@ class ChatGptExportReader {
         return new CustomException(ErrorCode.INVALID_FILE_FORMAT);
     }
 
-    record ExportConversation(String externalId, String title, OffsetDateTime startedAt) {
+    record ExportConversation(String externalId, String title, OffsetDateTime startedAt,
+                              String contentHash, String validationCode) {
+        ExportConversation(String externalId, String title, OffsetDateTime startedAt) {
+            this(externalId, title, startedAt, null, null);
+        }
     }
 
     private static class LimitedInputStream extends FilterInputStream {

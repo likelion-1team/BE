@@ -9,7 +9,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface ConversationRepository extends JpaRepository<Conversation, Long> {
 
-    java.util.Optional<Conversation> findByTeamIdAndExternalId(Long teamId, String externalId);
+    java.util.Optional<Conversation> findByTeamIdAndUserIdAndExternalId(Long teamId, Long userId, String externalId);
 
     List<Conversation> findByUploadId(Long uploadId);
 
@@ -22,6 +22,19 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
             group by c.upload.id
             """)
     List<UploadConversationCount> countByUploadIds(@Param("uploadIds") Collection<Long> uploadIds);
+
+    @Query("""
+            select c.externalId as externalId, v.contentHash as contentHash
+            from Conversation c join c.currentVersion v
+            where c.team.id = :teamId and c.user.id = :userId and c.externalId in :externalIds
+            and v.deletedAt is null
+            """)
+    List<CurrentContentHash> findCurrentContentHashes(Long teamId, Long userId, Collection<String> externalIds);
+
+    interface CurrentContentHash {
+        String getExternalId();
+        String getContentHash();
+    }
 
     interface UploadConversationCount {
         Long getUploadId();
