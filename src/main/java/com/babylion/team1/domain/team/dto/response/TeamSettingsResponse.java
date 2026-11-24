@@ -20,7 +20,8 @@ public record TeamSettingsResponse(
         Policies policies
 ) {
 
-    public static TeamSettingsResponse from(TeamSettings settings, TeamTaskType taskType) {
+    public static TeamSettingsResponse from(TeamSettings settings) {
+        TeamTaskType taskType = settings.getTaskType();
         return new TeamSettingsResponse(
                 settings.getVersion(),
                 taskType == null ? null : TaskType.from(taskType),
@@ -45,10 +46,9 @@ public record TeamSettingsResponse(
             List<String> unknownConditions
     ) {
 
-        /** 조건 목록을 저장하기 전까지는 기존 성공 정의를 성공 조건 하나로 반환한다. */
         private static TaskType from(TeamTaskType taskType) {
-            return new TaskType(taskType.getId(), taskType.getName(),
-                    List.of(taskType.getSuccessDefinition()), List.of(), List.of());
+            return new TaskType(taskType.getId(), taskType.getName(), taskType.getSuccessConditions(),
+                    taskType.getFailureConditions(), taskType.getUnknownConditions());
         }
     }
 

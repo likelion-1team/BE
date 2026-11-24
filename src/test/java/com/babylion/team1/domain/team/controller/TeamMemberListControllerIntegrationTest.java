@@ -18,6 +18,7 @@ import com.babylion.team1.support.TestAccessTokens;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDate;
 import java.util.UUID;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -303,7 +304,8 @@ class TeamMemberListControllerIntegrationTest {
         Team team = Team.builder().name("팀원 목록 검증").createdBy(leader).build();
         entityManager.persist(team);
         entityManager.persist(TeamMember.leader(team, leader));
-        TeamTaskType type = TeamTaskType.builder().team(team).name("업무 보고서").successDefinition("검토 통과").build();
+        TeamTaskType type = TeamTaskType.builder().team(team).name("업무 보고서").successConditions(List.of("검토 통과"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(type);
         return new TeamFixture(team, leader, type);
     }
@@ -336,7 +338,7 @@ class TeamMemberListControllerIntegrationTest {
 
     /** 기준을 다시 저장한 상태. 이전 버전은 현재 기준에서 내려간다 */
     private TeamSettings saveNextSettings(TeamSettings previous, LocalDate from, LocalDate to, Integer targetCount) {
-        TeamSettings next = previous.nextVersion(from, to, from, targetCount);
+        TeamSettings next = previous.nextVersion(null, from, to, from, targetCount, null);
         entityManager.persist(next);
         return next;
     }
