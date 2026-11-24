@@ -261,8 +261,21 @@ class UploadControllerIntegrationTest {
                 .andExpect(status().isCreated());
         entityManager.flush();
         Long uploadId = jdbc.queryForObject("select id from uploads where team_id = ?", Long.class, teamId);
-        String selectionId = jdbc.queryForObject(
-                "select selection_id from upload_candidates where upload_id = ?", String.class, uploadId);
+        String candidatePath = "/api/v1/uploads/{uploadId}/conversations";
+        String response = mockMvc.perform(get(candidatePath, uploadId).header(HttpHeaders.AUTHORIZATION, bearer)
+                        .param("q", "테스트").param("size", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].externalId").value(externalId))
+                .andExpect(jsonPath("$.data.items[0].selectable").value(true))
+                .andExpect(jsonPath("$.data.items[0].duplicateType").value("NONE"))
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andReturn().getResponse().getContentAsString();
+        String selectionId = com.jayway.jsonpath.JsonPath.read(response, "$.data.items[0].selectionId");
+        mockMvc.perform(get(candidatePath, uploadId).header(HttpHeaders.AUTHORIZATION, bearer).param("page", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(1));
         String key = UUID.randomUUID().toString();
         String body = """
                 {"settingsVersion":0,"selections":[{"selectionId":"%s","taskTypeId":%d}]}
@@ -278,6 +291,33 @@ class UploadControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.status").value("QUEUED")).andExpect(jsonPath("$.data.selectedCount").value(1));
         entityManager.flush();
         Long analysisId = jdbc.queryForObject("select id from analyses where upload_id = ?", Long.class, uploadId);
+        String statusPath = "/api/v1/analyses/{analysisId}";
+        String itemsPath = statusPath + "/items";
+        mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("QUEUED"))
+                .andExpect(jsonPath("$.data.progressPercent").value(0));
+        mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer).param("size", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].status").value("QUEUED"))
+                .andExpect(jsonPath("$.data.items[0].feedbackIds").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(1));
+        if (!commit) {
+            mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer).param("size", "101"))
+                    .andExpect(status().isBadRequest());
+            var otherUser = User.builder().name("다른 사용자").email("other-" + UUID.randomUUID() + "@test.com")
+                    .passwordHash("test-password-hash").build();
+            entityManager.persist(otherUser);
+            mockMvc.perform(get(candidatePath, uploadId).header(HttpHeaders.AUTHORIZATION,
+                            "Bearer " + accessTokens.create(otherUser.getId())))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+            mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION,
+                            "Bearer " + accessTokens.create(otherUser.getId())))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        }
+
         mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.analysisId").value(analysisId));
         if (!commit) {
@@ -361,6 +401,16 @@ class UploadControllerIntegrationTest {
                     return;
                 }
                 assertThat(state).isEqualTo("SUCCEEDED");
+                mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.succeededCount").value(1))
+                        .andExpect(jsonPath("$.data.progressPercent").value(100));
+                mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.items[0].status").value("SUCCEEDED"))
+                        .andExpect(jsonPath("$.data.items[0].aiAssessment.outcome").value("SUCCESS"))
+                        .andExpect(jsonPath("$.data.items[0].feedbackIds[0]").isNumber());
+
                 assertThat(jdbc.queryForObject(
                         "select status from analysis_items where analysis_id = ?", String.class, analysisId))
                         .isEqualTo("SUCCEEDED");

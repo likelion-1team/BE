@@ -2,8 +2,15 @@ package com.babylion.team1.domain.analysis.repository;
 
 import com.babylion.team1.domain.analysis.entity.AnalysisItem;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 public interface AnalysisItemRepository extends JpaRepository<AnalysisItem, Long> {
+    @EntityGraph(attributePaths = {"version", "version.conversation"})
+    Page<AnalysisItem> findByAnalysisIdAndUserIdAndVersionDeletedAtIsNullOrderByIdAsc(
+            Long analysisId, Long userId, Pageable pageable);
+
     java.util.Optional<AnalysisItem> findFirstByAnalysisIdAndStatusOrderByIdAsc(
             Long analysisId, com.babylion.team1.domain.analysis.entity.AnalysisItemStatus status);
 
