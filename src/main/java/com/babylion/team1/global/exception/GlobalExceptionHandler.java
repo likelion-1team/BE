@@ -39,7 +39,7 @@ public class GlobalExceptionHandler {
         } else {
             log.warn("[CustomException] {} - {}", errorCode.getCode(), e.getMessage());
         }
-        return toResponse(errorCode, e.getMessage(), null);
+        return toResponse(errorCode, e.getMessage(), e.getErrors());
     }
 
     /** @Valid @RequestBody 검증 실패 */

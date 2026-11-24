@@ -20,9 +20,11 @@ import com.babylion.team1.domain.team.dto.response.TeamSettingsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSettingsUpdateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
 import com.babylion.team1.domain.team.entity.Team;
+import com.babylion.team1.domain.team.entity.TeamGoal;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
+import com.babylion.team1.domain.team.repository.TeamGoalRepository;
 import com.babylion.team1.domain.team.repository.TeamMemberRepository;
 import com.babylion.team1.domain.team.repository.TeamRepository;
 import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
@@ -57,6 +59,7 @@ public class TeamService {
     private final UserRepository userRepository;
     private final TeamRepository teamRepository;
     private final TeamMemberRepository teamMemberRepository;
+    private final TeamGoalRepository teamGoalRepository;
     private final TeamSettingsRepository teamSettingsRepository;
     private final TeamTaskTypeRepository teamTaskTypeRepository;
     private final FeedbackRepository feedbackRepository;
@@ -72,6 +75,7 @@ public class TeamService {
                 .build());
         teamMemberRepository.save(TeamMember.leader(team, creator));
         teamSettingsRepository.save(TeamSettings.createDefault(team));
+        teamGoalRepository.save(TeamGoal.createDefault(team));
         return new TeamCreateResponse(team.getId());
     }
 
