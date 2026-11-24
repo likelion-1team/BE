@@ -412,6 +412,41 @@ class UploadControllerIntegrationTest {
                             Long.class, uploadId)).isEqualTo(priorVersionId);
                     verify(http, times(calls)).send(any(HttpRequest.class),
                             org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any());
+                    String retryUpload = mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+                                    .file(new MockMultipartFile("file", "conversations.json", "application/json",
+                                            export.getBytes(StandardCharsets.UTF_8)))
+                                    .header(HttpHeaders.AUTHORIZATION, bearer))
+                            .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+                    Number retryUploadId = com.jayway.jsonpath.JsonPath.read(retryUpload, "$.data.uploadId");
+                    String retryCandidates = mockMvc.perform(get(candidatePath, retryUploadId)
+                                    .header(HttpHeaders.AUTHORIZATION, bearer))
+                            .andExpect(status().isOk())
+                            .andExpect(jsonPath("$.data.items[0].selectable").value(true))
+                            .andReturn().getResponse().getContentAsString();
+                    String retrySelectionId = com.jayway.jsonpath.JsonPath.read(
+                            retryCandidates, "$.data.items[0].selectionId");
+
+                    mockMvc.perform(post("/api/v1/uploads/{uploadId}/analyses", retryUploadId)
+                                    .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
+                                    .header("Idempotency-Key", UUID.randomUUID().toString())
+                                    .content(body.replace(selectionId, retrySelectionId)))
+                            .andExpect(status().isAccepted());
+                    assertThat(jdbc.queryForObject("""
+                            select retry.version_id from analysis_items retry
+                            join analyses a on a.id = retry.analysis_id where a.upload_id = ?
+                            """, Long.class, retryUploadId.longValue())).isEqualTo(jdbc.queryForObject(
+                            "select version_id from analysis_items where analysis_id = ?", Long.class, analysisId));
+                    long retryDeadline = System.nanoTime() + java.time.Duration.ofSeconds(15).toNanos();
+                    String retryStatus;
+                    do {
+                        retryStatus = jdbc.queryForObject("select status from analyses where upload_id = ?",
+                                String.class, retryUploadId.longValue());
+                        if ("FAILED".equals(retryStatus)) {
+                            break;
+                        }
+                        Thread.sleep(50);
+                    } while (System.nanoTime() < retryDeadline);
+                    assertThat(retryStatus).isEqualTo("FAILED");
                     return;
                 }
                 assertThat(state).isEqualTo("SUCCEEDED");
