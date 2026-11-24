@@ -38,7 +38,24 @@ class AnalysisStartServiceTest {
             mock(UploadCandidateRepository.class), mock(TeamRepository.class), mock(TeamTaskTypeRepository.class),
             mock(TeamSettingsRepository.class), analyses, mock(AnalysisItemRepository.class),
             mock(ConversationRepository.class), mock(ConversationVersionRepository.class),
-            mock(MessageRepository.class), mock(UploadFileStorage.class), mock(ChatGptExportReader.class));
+            mock(MessageRepository.class), mock(UploadFileStorage.class), mock(ChatGptExportReader.class),
+            transactionManager());
+
+    private static org.springframework.transaction.PlatformTransactionManager transactionManager() {
+        var manager = mock(org.springframework.transaction.PlatformTransactionManager.class);
+        when(manager.getTransaction(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(ignored -> new org.springframework.transaction.support.SimpleTransactionStatus());
+        return manager;
+    }
+
+    @Test
+    void selectionOrderDoesNotChangeIdempotencyHash() {
+        var second = new CandidateSelection("sel_02", 7L);
+        var firstOrder = new AnalysisStartRequest(1, List.of(SELECTION, second));
+        var secondOrder = new AnalysisStartRequest(1, List.of(second, SELECTION));
+        org.assertj.core.api.Assertions.assertThat(AnalysisStartService.hashRequest(10L, firstOrder))
+                .isEqualTo(AnalysisStartService.hashRequest(10L, secondOrder));
+    }
 
     @Test
     void rejectsMissingKeyAndEmptyOrDuplicateSelectionsBeforeWriting() {

@@ -138,28 +138,29 @@ public class AnalysisItem {
         rubricVersion = rubric;
     }
 
-    public void begin() {
+    @Column(name = "claim_expires_at", columnDefinition = "DATETIME(6)")
+    private Instant claimExpiresAt;
+
+    public void begin(Instant claimExpiresAt) {
         status = AnalysisItemStatus.RUNNING;
         attemptCount++;
+        this.claimExpiresAt = claimExpiresAt;
     }
 
     public void succeed(int tokens, String model, boolean current) {
         status = AnalysisItemStatus.SUCCEEDED;
+        claimExpiresAt = null;
         estimatedTokens = tokens;
         modelVersion = model;
         this.current = current;
         finishedAt = Instant.now();
     }
 
-    public boolean recordFailedAttempt() {
-        attemptCount++;
-        if (attemptCount < 3) {
-            return false;
-        }
+    public void fail(String code) {
         status = AnalysisItemStatus.FAILED;
-        failureCode = "ANALYSIS_FAILED";
+        failureCode = code;
+        claimExpiresAt = null;
         finishedAt = Instant.now();
-        return true;
     }
 
     public void retire() {

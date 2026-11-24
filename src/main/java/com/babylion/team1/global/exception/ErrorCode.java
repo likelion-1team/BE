@@ -22,6 +22,7 @@ public enum ErrorCode {
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED", "지원하지 않는 HTTP 메서드입니다."),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE", "지원하지 않는 Content-Type입니다."),
     ANALYSIS_ALREADY_COMPLETED(HttpStatus.CONFLICT, "ANALYSIS_ALREADY_COMPLETED", "이미 분석이 완료되었습니다."),
+    DUPLICATE_CONTENT(HttpStatus.CONFLICT, "DUPLICATE_CONTENT", "이미 등록된 대화 내용입니다."),
     IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", "같은 키로 다른 요청을 보낼 수 없습니다."),
     UPLOAD_CONSUMED(HttpStatus.CONFLICT, "UPLOAD_CONSUMED", "이미 분석이 확정된 업로드입니다."),
     VERSION_CONFLICT(HttpStatus.CONFLICT, "VERSION_CONFLICT", "분석 기준 버전이 변경되었습니다."),

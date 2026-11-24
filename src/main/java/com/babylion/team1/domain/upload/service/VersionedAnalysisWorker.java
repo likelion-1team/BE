@@ -1,17 +1,15 @@
 package com.babylion.team1.domain.upload.service;
 
-import com.babylion.team1.domain.analysis.entity.AnalysisItem;
 import com.babylion.team1.domain.analysis.entity.AnalysisItemStatus;
-import com.babylion.team1.domain.analysis.entity.AnalysisOutcome;
-import com.babylion.team1.domain.analysis.entity.AnalysisReworkType;
 import com.babylion.team1.domain.analysis.entity.ModelCall;
-import com.babylion.team1.domain.analysis.entity.ScopeClassification;
 import com.babylion.team1.domain.analysis.repository.ModelCallRepository;
 import com.babylion.team1.domain.analysis.entity.AnalysisStatus;
 import com.babylion.team1.domain.analysis.repository.AnalysisItemRepository;
 import com.babylion.team1.domain.analysis.repository.AnalysisRepository;
 import com.babylion.team1.domain.conversation.repository.MessageRepository;
 import com.babylion.team1.domain.team.repository.TeamRepository;
+import java.time.Instant;
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.ArrayList;
@@ -36,7 +34,6 @@ class VersionedAnalysisWorker {
     private final AnalysisPersistence persistence;
     private final AnalysisPricing pricing;
     private final ModelCallRepository modelCalls;
-    private final TransactionTemplate auditTransaction;
     private final TransactionTemplate transaction;
 
     VersionedAnalysisWorker(AnalysisRepository analyses, AnalysisItemRepository items, MessageRepository messages,
@@ -54,9 +51,6 @@ class VersionedAnalysisWorker {
         this.persistence = persistence;
         this.pricing = pricing;
         this.modelCalls = modelCalls;
-        this.auditTransaction = new TransactionTemplate(transactionManager);
-        this.auditTransaction.setPropagationBehavior(
-                org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transaction = new TransactionTemplate(transactionManager);
     }
 
@@ -67,27 +61,60 @@ class VersionedAnalysisWorker {
     }
 
     private void processNext(Long analysisId) {
-        Long itemId = transaction.execute(status -> {
-            var job = analyses.lockById(analysisId).orElseThrow();
-            job.begin();
-            return items.findFirstByAnalysisIdAndStatusOrderByIdAsc(analysisId, AnalysisItemStatus.QUEUED)
-                    .map(item -> item.getId()).orElse(null);
-        });
-        if (itemId == null) {
+        Input input = transaction.execute(status -> claim(analysisId));
+        if (input == null) {
             return;
         }
         try {
-            transaction.executeWithoutResult(status -> analyze(analysisId, itemId));
+            Result result = analyze(input);
+            transaction.executeWithoutResult(status -> save(analysisId, input.itemId(), result));
         } catch (RuntimeException exception) {
-            log.warn("분석 항목 {} 처리 실패 ({})", itemId, exception.getClass().getSimpleName());
+            String code = exception instanceof GeminiFeedbackClient.ModelFailure
+                    ? exception.getMessage() : "ANALYSIS_FAILED";
+            log.warn("분석 항목 {} 처리 실패 ({})", input.itemId(), code);
             transaction.executeWithoutResult(status -> {
                 var job = analyses.lockById(analysisId).orElseThrow();
-                var item = items.findById(itemId).orElseThrow();
-                if (item.getStatus() == AnalysisItemStatus.QUEUED && item.recordFailedAttempt()) {
+                var item = items.findById(input.itemId()).orElseThrow();
+                if (item.getStatus() == AnalysisItemStatus.RUNNING) {
+                    item.fail(code);
                     job.recordResult(false);
                 }
             });
         }
+    }
+
+    private Input claim(Long analysisId) {
+        var job = analyses.lockById(analysisId).orElseThrow();
+        // Do not repeat model calls for claims abandoned by a stopped worker.
+        var now = Instant.now();
+        for (var expired : items.findByAnalysisIdAndStatusAndClaimExpiresAtBefore(
+                analysisId, AnalysisItemStatus.RUNNING, now)) {
+            expired.fail("WORKER_TIMEOUT");
+            job.recordResult(false);
+        }
+        var item = items.findFirstByAnalysisIdAndStatusOrderByIdAsc(analysisId, AnalysisItemStatus.QUEUED)
+                .orElse(null);
+        if (item == null) {
+            return null;
+        }
+        job.begin();
+        var version = item.getVersion();
+        var rows = messages.findByVersionIdOrderByIdxAsc(version.getId());
+        item.begin(now.plus(Duration.ofMinutes(15)));
+        if (rows.isEmpty() || version.getDeletedAt() != null) {
+            item.fail("ANALYSIS_SOURCE_UNAVAILABLE");
+            job.recordResult(false);
+            return null;
+        }
+        var turns = rows.stream().map(row -> new ChatGptConversationBranch.Turn(row.getRole(), row.getContent(),
+                row.getCreatedAt(), row.getSourceModel(), row.isBranchPoint())).toList();
+        String taskName = item.getTaskNameSnapshot();
+        String successDefinition = item.getSuccessDefinitionSnapshot();
+        if (taskName == null || successDefinition == null) {
+            taskName = item.getTaskType().getName();
+            successDefinition = item.getTaskType().getSuccessDefinition();
+        }
+        return new Input(item.getId(), taskName, successDefinition, turns);
     }
 
     private List<GeminiFeedbackClient.AssessmentMessage> assessmentMessages(
@@ -106,7 +133,7 @@ class VersionedAnalysisWorker {
     }
 
     private Consumer<GeminiFeedbackClient.Attempt> audit(Long itemId, ModelCall.Purpose purpose) {
-        return attempt -> auditTransaction.executeWithoutResult(status -> {
+        return attempt -> transaction.executeWithoutResult(status -> {
             var cost = attempt.inputTokens() == null || attempt.outputTokens() == null ? null
                     : pricing.cost(pricing.rate(attempt.model()), attempt.inputTokens(), attempt.outputTokens());
             modelCalls.save(ModelCall.builder().item(items.getReferenceById(itemId)).purpose(purpose)
@@ -117,31 +144,14 @@ class VersionedAnalysisWorker {
         });
     }
 
-    private void analyze(Long analysisId, Long itemId) {
-        var job = analyses.lockById(analysisId).orElseThrow();
-        var item = items.findById(itemId).orElseThrow();
-        if (item.getStatus() != AnalysisItemStatus.QUEUED) {
-            return;
-        }
-        var version = item.getVersion();
-        var rows = messages.findByVersionIdOrderByIdxAsc(version.getId());
-        if (rows.isEmpty() || version.getDeletedAt() != null) {
-            throw new IllegalStateException("분석 원문을 사용할 수 없습니다.");
-        }
-        var turns = rows.stream().map(row -> new ChatGptConversationBranch.Turn(row.getRole(), row.getContent(),
-                row.getCreatedAt(), row.getSourceModel(), row.isBranchPoint())).toList();
-        String taskName = item.getTaskNameSnapshot();
-        String successDefinition = item.getSuccessDefinitionSnapshot();
-        if (taskName == null || successDefinition == null) {
-            taskName = item.getTaskType().getName();
-            successDefinition = item.getTaskType().getSuccessDefinition();
-        }
-        var assessment = gemini.assess(taskName, successDefinition, assessmentMessages(turns),
-                audit(item.getId(), ModelCall.Purpose.ASSESSMENT));
+    private Result analyze(Input input) {
+        var turns = input.turns();
+        var assessment = gemini.assess(input.taskName(), input.successDefinition(), assessmentMessages(turns),
+                audit(input.itemId(), ModelCall.Purpose.ASSESSMENT));
         var result = metrics.calculate(turns);
-        var feedbackAudit = audit(item.getId(), ModelCall.Purpose.FEEDBACK);
+        var feedbackAudit = audit(input.itemId(), ModelCall.Purpose.FEEDBACK);
         var suggestions = rules.detect(result).stream().filter(finding -> !finding.evidence().isEmpty()
-                && finding.evidence().stream().allMatch(index -> index >= 0 && index < rows.size()))
+                && finding.evidence().stream().allMatch(index -> index >= 0 && index < turns.size()))
                 .map(finding -> {
                     String question = turns.get(finding.evidence().get(0)).content();
                     String excerpt = question.substring(0, question.offsetByCodePoints(0,
@@ -149,16 +159,27 @@ class VersionedAnalysisWorker {
                     return new AnalysisPersistence.Suggestion(finding, gemini.generate(finding.type(), question, feedbackAudit), excerpt);
                 }).toList();
 
-        item.begin();
-        if (assessment == null) {
-            item.recordAssessment(ScopeClassification.INSUFFICIENT_CONTEXT, AnalysisOutcome.UNKNOWN,
-                    AnalysisReworkType.UNKNOWN, List.of(), "v4-1");
-        } else {
-            item.recordAssessment(assessment.scope(), assessment.outcome(), assessment.reworkType(),
-                    assessment.evidenceMessageKeys(), "v4-1");
+        return new Result(assessment, result, suggestions);
+    }
+
+    private void save(Long analysisId, Long itemId, Result output) {
+        var job = analyses.lockById(analysisId).orElseThrow();
+        // Lock before the first snapshot read so concurrent versions see the latest promotion.
+        teams.findByIdForUpdate(job.getTeam().getId()).orElseThrow();
+        var item = items.findById(itemId).orElseThrow();
+        if (item.getStatus() != AnalysisItemStatus.RUNNING) {
+            return;
         }
-        // Serialize current-version promotion with uploads and other versions from this team.
-        teams.findByIdForUpdate(item.getTeam().getId()).orElseThrow();
+        var version = item.getVersion();
+        if (version.getDeletedAt() != null) {
+            item.fail("ANALYSIS_SOURCE_UNAVAILABLE");
+            job.recordResult(false);
+            return;
+        }
+        var assessment = output.assessment();
+        var result = output.metrics();
+        item.recordAssessment(assessment.scope(), assessment.outcome(), assessment.reworkType(),
+                assessment.evidenceMessageKeys(), "v4-1");
         var conversation = version.getConversation();
         var previous = conversation.getCurrentVersion();
         boolean promote = previous == null || previous.getInputVersion() < version.getInputVersion();
@@ -171,16 +192,24 @@ class VersionedAnalysisWorker {
             if (previous != null && !Objects.equals(previous.getId(), version.getId())) {
                 items.findByVersionIdAndCurrentTrue(previous.getId()).forEach(current -> current.retire());
             }
+            var rows = messages.findByVersionIdOrderByIdxAsc(version.getId());
             result.requests().forEach(request -> rows.get(request.index()).markRework(request.rework()));
             conversation.promote(version);
             conversation.recordAnalysis(model, result.requests().size(), tokens,
                     pricing.cost(pricing.rate(result.model()), result.input(), result.output()), result.success(),
                     result.requests().stream().anyMatch(ConversationMetrics.Request::rework), result.review(), result.rework());
             persistence.storeVersionFeedback(job.getUpload(), conversation, item.getTaskType().getId(),
-                    version.getConversationDate(), suggestions);
+                    version.getConversationDate(), output.suggestions());
         }
         version.recordEstimatedTokens(tokens);
-        item.succeed(tokens, assessment == null ? null : gemini.model(), promote);
+        item.succeed(tokens, gemini.model(), promote);
         job.recordResult(true);
+    }
+    private record Input(Long itemId, String taskName, String successDefinition,
+                         List<ChatGptConversationBranch.Turn> turns) {
+    }
+
+    private record Result(GeminiFeedbackClient.Assessment assessment, ConversationMetrics.Result metrics,
+                          List<AnalysisPersistence.Suggestion> suggestions) {
     }
 }

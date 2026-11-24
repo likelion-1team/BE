@@ -58,7 +58,7 @@ class GeminiFeedbackClient {
                 "contents", List.of(Map.of("parts", List.of(Map.of("text",
                         type.title + "\n권장 방향: " + type.improvement + "\n사용자 질문 예시:\n" + excerpt)))),
                 "generationConfig", Map.of("responseMimeType", "application/json"));
-        return request(payload, 2, audit, json -> {
+        return request(payload, 2, false, audit, json -> {
             String improvement = json.path("improvement").asString("");
             String example = json.path("exampleAfter").asString("");
             return !improvement.isBlank() && !example.isBlank() && improvement.length() <= 4_000
@@ -84,7 +84,7 @@ class GeminiFeedbackClient {
                 "systemInstruction", Map.of("parts", List.of(Map.of("text", instruction))),
                 "contents", List.of(Map.of("parts", List.of(Map.of("text", data)))),
                 "generationConfig", Map.of("responseMimeType", "application/json"));
-        return request(payload, 3, audit, json -> parseAssessment(json, keys));
+        return request(payload, 3, true, audit, json -> parseAssessment(json, keys));
     }
 
     private static Assessment parseAssessment(JsonNode json, Set<String> allowedKeys) {
@@ -111,10 +111,10 @@ class GeminiFeedbackClient {
         return new Assessment(scope, outcome, rework, List.copyOf(keys));
     }
 
-    private <T> T request(Map<String, ?> payload, int attempts, Consumer<Attempt> audit,
+    private <T> T request(Map<String, ?> payload, int attempts, boolean required, Consumer<Attempt> audit,
                           Function<JsonNode, T> decode) {
         if (apiKey.isBlank()) {
-            return null;
+            return unavailable(required, "MODEL_NOT_CONFIGURED");
         }
         var request = HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(15))
                 .header("x-goog-api-key", apiKey).header("Content-Type", "application/json")
@@ -124,11 +124,17 @@ class GeminiFeedbackClient {
             Integer inputTokens = null;
             Integer outputTokens = null;
             String error = null;
+            boolean retryable = false;
+            long delay = 250L << attempt;
             T result = null;
             try {
                 var response = http.send(request, HttpResponse.BodyHandlers.ofString());
                 if (response.statusCode() != 200) {
                     error = "HTTP_" + response.statusCode();
+                    retryable = response.statusCode() == 429 || response.statusCode() >= 500;
+                    if (retryable) {
+                        delay = retryDelay(response, delay);
+                    }
                 } else {
                     var envelope = mapper.readTree(response.body());
                     var usage = envelope.path("usageMetadata");
@@ -147,16 +153,59 @@ class GeminiFeedbackClient {
                 error = "INTERRUPTED";
             } catch (IOException e) {
                 error = "MODEL_TRANSPORT_ERROR";
+                retryable = true;
             } catch (RuntimeException e) {
                 error = "INVALID_MODEL_RESPONSE";
             }
             int latency = (int) Math.min(Integer.MAX_VALUE, Duration.ofNanos(System.nanoTime() - start).toMillis());
             audit.accept(new Attempt(model, inputTokens, outputTokens, latency, error));
-            if (result != null || "INTERRUPTED".equals(error)) {
+            if (result != null) {
                 return result;
             }
+            if (!retryable || attempt + 1 == attempts) {
+                return unavailable(required, error);
+            }
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return unavailable(required, "INTERRUPTED");
+            }
+        }
+        throw new IllegalStateException("모델 호출 시도 횟수가 지정되지 않았습니다.");
+    }
+
+    private static long retryDelay(HttpResponse<?> response, long fallback) {
+        var headers = response.headers();
+        if (headers == null) {
+            return fallback;
+        }
+        return headers.firstValue("Retry-After").map(value -> {
+            try {
+                return Math.min(30_000L, Math.max(fallback, Duration.ofSeconds(Long.parseLong(value)).toMillis()));
+            } catch (NumberFormatException | ArithmeticException ignored) {
+                try {
+                    var when = java.time.ZonedDateTime.parse(value, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME);
+                    return Math.min(30_000L, Math.max(fallback,
+                            Duration.between(java.time.Instant.now(), when.toInstant()).toMillis()));
+                } catch (java.time.DateTimeException | ArithmeticException malformed) {
+                    return fallback;
+                }
+            }
+        }).orElse(fallback);
+    }
+
+    private static <T> T unavailable(boolean required, String code) {
+        if (required) {
+            throw new ModelFailure(code);
         }
         return null;
+    }
+
+    static final class ModelFailure extends RuntimeException {
+        ModelFailure(String code) {
+            super(code);
+        }
     }
 
     private static Integer tokenCount(JsonNode node) {

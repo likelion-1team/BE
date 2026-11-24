@@ -44,7 +44,11 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -66,12 +70,43 @@ public class AnalysisStartService {
     private final UploadFileStorage storage;
     private final ChatGptExportReader reader;
 
-    @Transactional
+    private final PlatformTransactionManager transactionManager;
+
     public AnalysisStartResponse start(Long uploadId, Long userId, String idempotencyKey,
                                        AnalysisStartRequest request) {
         String key = validateKey(idempotencyKey);
         var selections = validateSelections(request);
         String hash = hashRequest(uploadId, request);
+        var prepared = prepareSource(uploadId, userId, selections);
+        return new TransactionTemplate(transactionManager).execute(status ->
+                accept(uploadId, userId, request.settingsVersion(), key, hash, selections, prepared));
+    }
+
+    private PreparedSource prepareSource(Long uploadId, Long userId, Map<String, Long> selections) {
+        var fileName = uploads.findReadableFileName(uploadId, userId,
+                List.of(UploadStatus.UPLOADED, UploadStatus.FAILED));
+        if (fileName.isEmpty()) {
+            return new PreparedSource(Map.of(), null);
+        }
+        var selected = candidates.findByUploadIdAndSelectionIdIn(uploadId, selections.keySet());
+        if (selected.size() != selections.size() || selected.stream().anyMatch(candidate -> !candidate.isSelectable())) {
+            return new PreparedSource(Map.of(), null);
+        }
+        var externalIds = selected.stream().map(UploadCandidate::getExternalId).collect(Collectors.toSet());
+        boolean zipped = fileName.orElseThrow().toLowerCase(Locale.ROOT).endsWith(".zip");
+        try {
+            var source = reader.readSelected(storage.pathFor(uploadId), zipped, externalIds);
+            var turns = source.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey,
+                    entry -> ChatGptConversationBranch.restore(entry.getValue())));
+            return new PreparedSource(turns, null);
+        } catch (CustomException exception) {
+            // A concurrent request may have consumed the upload while the file was being read.
+            return new PreparedSource(Map.of(), exception);
+        }
+    }
+
+    private AnalysisStartResponse accept(Long uploadId, Long userId, int settingsVersion, String key, String hash,
+                                         Map<String, Long> selections, PreparedSource prepared) {
         // Serialize a user's idempotency keys even when competing requests name different uploads.
         if (entityManager.find(User.class, userId, LockModeType.PESSIMISTIC_WRITE) == null) {
             throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
@@ -102,21 +137,28 @@ public class AnalysisStartService {
         }
         var current = settings.findByTeamId(teamId).orElseThrow(() -> new CustomException(ErrorCode.VERSION_CONFLICT));
         if (upload.getSettings() == null || !current.getId().equals(upload.getSettings().getId())
-                || current.getVersion() != request.settingsVersion()) {
+                || current.getVersion() != settingsVersion) {
             throw new CustomException(ErrorCode.VERSION_CONFLICT);
         }
 
         var allowedTypes = taskTypes.findByTeamIdAndIsActiveTrueOrderById(teamId).stream()
                 .collect(Collectors.toMap(TeamTaskType::getId, Function.identity()));
         var selected = candidates.findByUploadIdAndSelectionIdIn(uploadId, selections.keySet());
-        if (selected.size() != selections.size() || selected.stream().anyMatch(candidate ->
+        if (selected.size() != selections.size()) {
+            throw new CustomException(ErrorCode.VALIDATION_FAILED);
+        }
+        if (selected.stream().anyMatch(candidate ->
+                candidate.getDuplicateType() == UploadCandidate.DuplicateType.SAME_CONTENT)) {
+            throw new CustomException(ErrorCode.DUPLICATE_CONTENT);
+        }
+        if (selected.stream().anyMatch(candidate ->
                 !candidate.isSelectable() || !allowedTypes.containsKey(selections.get(candidate.getSelectionId())))) {
             throw new CustomException(ErrorCode.VALIDATION_FAILED);
         }
-        var externalIds = selected.stream().map(UploadCandidate::getExternalId).collect(Collectors.toSet());
-        boolean zipped = upload.getFileName().toLowerCase(Locale.ROOT).endsWith(".zip");
-        var source = reader.readSelected(file, zipped, externalIds);
-        if (!source.keySet().equals(externalIds)) {
+        if (prepared.error() != null) {
+            throw prepared.error();
+        }
+        if (selected.stream().anyMatch(candidate -> !prepared.turns().containsKey(candidate.getExternalId()))) {
             throw new CustomException(ErrorCode.VALIDATION_FAILED);
         }
 
@@ -125,7 +167,7 @@ public class AnalysisStartService {
                 .selectedCount(selected.size()).build());
         for (UploadCandidate candidate : selected) {
             var taskType = allowedTypes.get(selections.get(candidate.getSelectionId()));
-            var turns = ChatGptConversationBranch.restore(source.get(candidate.getExternalId()));
+            var turns = prepared.turns().get(candidate.getExternalId());
             var version = saveVersion(upload, candidate, taskType, turns);
             items.save(AnalysisItem.builder().analysis(analysis).version(version).team(upload.getTeam())
                     .user(upload.getUploader()).taskType(taskType).taskNameSnapshot(taskType.getName())
@@ -146,7 +188,7 @@ public class AnalysisStartService {
                         .title(candidate.getTitle()).startedAt(candidate.getStartedAt()).conversationDate(date)
                         .turnCount(0).estimatedTokens(0).isSuccess(false).build()));
         if (versions.existsByConversationIdAndContentHash(conversation.getId(), candidate.getContentHash())) {
-            throw new CustomException(ErrorCode.VALIDATION_FAILED);
+            throw new CustomException(ErrorCode.DUPLICATE_CONTENT);
         }
         int inputVersion = versions.findFirstByConversationIdOrderByInputVersionDesc(conversation.getId())
                 .map(ConversationVersion::getInputVersion).orElse(0) + 1;
@@ -195,9 +237,10 @@ public class AnalysisStartService {
         return selections;
     }
 
-    private static String hashRequest(Long uploadId, AnalysisStartRequest request) {
+    static String hashRequest(Long uploadId, AnalysisStartRequest request) {
         var canonical = new StringBuilder().append(uploadId).append(':').append(request.settingsVersion());
-        request.selections().forEach(selection -> canonical.append(':').append(selection.selectionId().length())
+        request.selections().stream().sorted(Comparator.comparing(AnalysisStartRequest.CandidateSelection::selectionId))
+                .forEach(selection -> canonical.append(':').append(selection.selectionId().length())
                 .append(':').append(selection.selectionId()).append(':').append(selection.taskTypeId()));
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
@@ -205,6 +248,9 @@ public class AnalysisStartService {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    private record PreparedSource(Map<String, List<ChatGptConversationBranch.Turn>> turns, CustomException error) {
     }
 
     private static AnalysisStartResponse response(Analysis analysis) {

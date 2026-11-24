@@ -7,5 +7,8 @@ public interface AnalysisItemRepository extends JpaRepository<AnalysisItem, Long
     java.util.Optional<AnalysisItem> findFirstByAnalysisIdAndStatusOrderByIdAsc(
             Long analysisId, com.babylion.team1.domain.analysis.entity.AnalysisItemStatus status);
 
+    java.util.List<AnalysisItem> findByAnalysisIdAndStatusAndClaimExpiresAtBefore(Long analysisId,
+            com.babylion.team1.domain.analysis.entity.AnalysisItemStatus status, java.time.Instant cutoff);
+
     java.util.List<AnalysisItem> findByVersionIdAndCurrentTrue(Long versionId);
 }

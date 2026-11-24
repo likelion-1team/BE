@@ -225,8 +225,10 @@ class UploadControllerIntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void acceptsVersionedSelectionAndRunsWorkerAfterCommit(boolean commit) throws Exception {
+    @ValueSource(strings = {"replay", "success", "invalid-response", "transient-failure"})
+    void acceptsVersionedSelectionAndRunsWorkerAfterCommit(String scenario) throws Exception {
+        boolean commit = !scenario.equals("replay");
+        boolean fails = commit && !scenario.equals("success");
         User uploader = User.builder().name("분석 테스트").email("analysis-it-" + UUID.randomUUID() + "@test.com")
                 .passwordHash("test-password-hash").build();
         entityManager.persist(uploader);
@@ -301,8 +303,31 @@ class UploadControllerIntegrationTest {
             var invalidResponse = modelResponse(mapper, invalidAssessment);
             var assessmentResponse = modelResponse(mapper, validAssessment);
             var feedbackResponse = modelResponse(mapper, Map.of("improvement", "개선 방안", "exampleAfter", "개선 프롬프트"));
-            when(http.send(any(HttpRequest.class), org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
-                    .thenReturn(invalidResponse, assessmentResponse, feedbackResponse);
+            @SuppressWarnings("unchecked")
+            HttpResponse<String> unavailable = mock(HttpResponse.class);
+            when(unavailable.statusCode()).thenReturn(503);
+            var provider = when(http.send(any(HttpRequest.class),
+                    org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()));
+            switch (scenario) {
+                case "invalid-response" -> provider.thenReturn(invalidResponse);
+                case "transient-failure" -> provider.thenReturn(unavailable);
+                default -> provider.thenReturn(unavailable, assessmentResponse, feedbackResponse);
+            }
+            Long priorVersionId = null;
+            if (fails) {
+                jdbc.update("""
+                        insert into conversation_versions
+                            (conversation_id, source_upload_id, input_version, content_hash, started_at,
+                             conversation_date, turn_count, estimated_tokens, created_at)
+                        select conversation_id, source_upload_id, 0, repeat('0',64), started_at,
+                               conversation_date, turn_count, estimated_tokens, created_at
+                        from conversation_versions where source_upload_id = ?
+                        """, uploadId);
+                priorVersionId = jdbc.queryForObject(
+                        "select id from conversation_versions where source_upload_id = ? and input_version = 0",
+                        Long.class, uploadId);
+                jdbc.update("update conversations set current_version_id = ? where upload_id = ?", priorVersionId, uploadId);
+            }
             try {
                 ReflectionTestUtils.setField(gemini, "http", http);
                 ReflectionTestUtils.setField(gemini, "apiKey", "local-test-key");
@@ -318,6 +343,23 @@ class UploadControllerIntegrationTest {
                     Thread.sleep(50);
                 } while (System.nanoTime() < deadline);
 
+                if (fails) {
+                    assertThat(state).isEqualTo("FAILED");
+                    String code = scenario.equals("invalid-response") ? "INVALID_MODEL_RESPONSE" : "HTTP_503";
+                    int calls = scenario.equals("invalid-response") ? 1 : 3;
+                    assertThat(jdbc.queryForMap("""
+                            select status, failure_code, is_current from analysis_items where analysis_id = ?
+                            """, analysisId)).containsEntry("status", "FAILED").containsEntry("failure_code", code);
+                    assertThat(jdbc.queryForObject("""
+                            select count(*) from model_calls c join analysis_items i on i.id = c.item_id
+                            where i.analysis_id = ? and c.status = 'FAILED'
+                            """, Integer.class, analysisId)).isEqualTo(calls);
+                    assertThat(jdbc.queryForObject("select current_version_id from conversations where upload_id = ?",
+                            Long.class, uploadId)).isEqualTo(priorVersionId);
+                    verify(http, times(calls)).send(any(HttpRequest.class),
+                            org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any());
+                    return;
+                }
                 assertThat(state).isEqualTo("SUCCEEDED");
                 assertThat(jdbc.queryForObject(
                         "select status from analysis_items where analysis_id = ?", String.class, analysisId))
@@ -341,7 +383,7 @@ class UploadControllerIntegrationTest {
                 assertThat(jdbc.queryForObject("""
                         select sum(c.input_tokens) from model_calls c join analysis_items i on i.id = c.item_id
                         where i.analysis_id = ?
-                        """, Integer.class, analysisId)).isEqualTo(30);
+                        """, Integer.class, analysisId)).isEqualTo(20);
             } finally {
                 ReflectionTestUtils.setField(gemini, "http", originalHttp);
                 ReflectionTestUtils.setField(gemini, "apiKey", originalKey);
