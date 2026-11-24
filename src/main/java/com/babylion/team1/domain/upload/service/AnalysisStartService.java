@@ -1,22 +1,48 @@
 package com.babylion.team1.domain.upload.service;
 
+import com.babylion.team1.domain.analysis.entity.Analysis;
+import com.babylion.team1.domain.analysis.entity.AnalysisItem;
+import com.babylion.team1.domain.analysis.entity.AnalysisStatus;
+import com.babylion.team1.domain.analysis.repository.AnalysisItemRepository;
+import com.babylion.team1.domain.analysis.repository.AnalysisRepository;
+import com.babylion.team1.domain.conversation.entity.Conversation;
+import com.babylion.team1.domain.conversation.entity.ConversationVersion;
+import com.babylion.team1.domain.conversation.entity.Message;
+import com.babylion.team1.domain.conversation.repository.ConversationRepository;
+import com.babylion.team1.domain.conversation.repository.ConversationVersionRepository;
+import com.babylion.team1.domain.conversation.repository.MessageRepository;
+import com.babylion.team1.domain.team.entity.TeamTaskType;
+import com.babylion.team1.domain.team.repository.TeamRepository;
 import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
 import com.babylion.team1.domain.team.repository.TeamTaskTypeRepository;
-import com.babylion.team1.domain.upload.dto.request.AnalysisStartRequest.Selection;
+import com.babylion.team1.domain.upload.dto.request.AnalysisStartRequest;
 import com.babylion.team1.domain.upload.dto.response.AnalysisStartResponse;
+import com.babylion.team1.domain.upload.entity.Upload;
+import com.babylion.team1.domain.upload.entity.UploadCandidate;
 import com.babylion.team1.domain.upload.entity.UploadStatus;
+import com.babylion.team1.domain.upload.repository.UploadCandidateRepository;
 import com.babylion.team1.domain.upload.repository.UploadRepository;
+import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
-import java.util.HashSet;
-import java.util.List;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.Locale;
-import java.util.Set;
+import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,63 +50,162 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class AnalysisStartService {
 
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+
+    private final EntityManager entityManager;
     private final UploadRepository uploads;
+    private final UploadCandidateRepository candidates;
+    private final TeamRepository teams;
     private final TeamTaskTypeRepository taskTypes;
     private final TeamSettingsRepository settings;
+    private final AnalysisRepository analyses;
+    private final AnalysisItemRepository items;
+    private final ConversationRepository conversations;
+    private final ConversationVersionRepository versions;
+    private final MessageRepository messages;
     private final UploadFileStorage storage;
-    private final ApplicationEventPublisher events;
     private final ChatGptExportReader reader;
 
     @Transactional
-    public AnalysisStartResponse start(Long uploadId, Long userId, List<Selection> selections) {
-        var upload = uploads.findByIdForUpdate(uploadId)
-                .orElseThrow(() -> new CustomException(ErrorCode.UPLOAD_NOT_FOUND));
-        if (!upload.isUploadedBy(userId)) {
-            throw new CustomException(ErrorCode.NOT_UPLOADER);
+    public AnalysisStartResponse start(Long uploadId, Long userId, String idempotencyKey,
+                                       AnalysisStartRequest request) {
+        String key = validateKey(idempotencyKey);
+        var selections = validateSelections(request);
+        String hash = hashRequest(uploadId, request);
+        // Serialize a user's idempotency keys even when competing requests name different uploads.
+        if (entityManager.find(User.class, userId, LockModeType.PESSIMISTIC_WRITE) == null) {
+            throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
         }
-        switch (upload.getStatus()) {
-            case ANALYZING -> throw new CustomException(ErrorCode.ANALYSIS_IN_PROGRESS);
-            case DONE -> throw new CustomException(ErrorCode.ANALYSIS_ALREADY_COMPLETED);
-            case UPLOADED, FAILED -> {
-                if (!Files.isRegularFile(storage.pathFor(uploadId))
-                        || UploadFileExpiry.isExpired(upload, storage.pathFor(uploadId), LocalDateTime.now())) {
-                    throw new CustomException(ErrorCode.UPLOAD_EXPIRED);
-                }
-            }
-        }
-        if (selections == null || selections.isEmpty()) {
-            throw new CustomException(ErrorCode.NO_CONVERSATION_SELECTED);
-        }
-
+        var upload = uploads.findByIdForUpdate(uploadId).filter(row -> row.isUploadedBy(userId))
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
         Long teamId = upload.getTeam().getId();
-        Set<Long> allowedTaskTypes = taskTypes.findByTeamIdAndIsActiveTrueOrderById(teamId).stream()
-                .map(taskType -> taskType.getId())
-                .collect(Collectors.toSet());
-        Set<String> selectedIds = new HashSet<>();
-        for (Selection selection : selections) {
-            if (!allowedTaskTypes.contains(selection.taskTypeId())) {
-                throw new CustomException(ErrorCode.TASK_TYPE_NOT_ALLOWED);
+        teams.findByIdForUpdate(teamId).orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+
+        var previous = analyses.findByUserIdAndIdempotencyKey(userId, key).orElse(null);
+        if (previous != null) {
+            if (previous.getCreatedAt().plus(Duration.ofHours(24)).isAfter(Instant.now())) {
+                if (!previous.getRequestHash().equals(hash)) {
+                    throw new CustomException(ErrorCode.IDEMPOTENCY_CONFLICT);
+                }
+                return response(previous);
             }
-            if (!selectedIds.add(selection.externalId())) {
-                throw new CustomException(ErrorCode.INVALID_REQUEST, "같은 대화를 여러 번 선택할 수 없습니다.");
-            }
+            previous.releaseExpiredKey();
+            analyses.flush();
+        }
+        if (upload.getStatus() == UploadStatus.CONSUMED || upload.getStatus() == UploadStatus.DONE
+                || upload.getStatus() == UploadStatus.ANALYZING) {
+            throw new CustomException(ErrorCode.UPLOAD_CONSUMED);
+        }
+        var file = storage.pathFor(uploadId);
+        if (!Files.isRegularFile(file) || !upload.getUploadedAt().plusHours(1).isAfter(LocalDateTime.now())) {
+            throw new CustomException(ErrorCode.UPLOAD_EXPIRED);
+        }
+        var current = settings.findByTeamId(teamId).orElseThrow(() -> new CustomException(ErrorCode.VERSION_CONFLICT));
+        if (upload.getSettings() == null || !current.getId().equals(upload.getSettings().getId())
+                || current.getVersion() != request.settingsVersion()) {
+            throw new CustomException(ErrorCode.VERSION_CONFLICT);
         }
 
-        var period = upload.getTargetFrom() != null && upload.getTargetTo() != null
-                ? new UploadFileStorage.TargetPeriod(upload.getTargetFrom(), upload.getTargetTo())
-                : storage.readTargetPeriod(uploadId).orElseGet(() -> settings.findByTeamId(teamId)
-                .filter(teamSettings -> teamSettings.isTargetSet())
-                .map(teamSettings -> new UploadFileStorage.TargetPeriod(
-                        teamSettings.getTargetFrom(), teamSettings.getTargetTo()))
-                .orElseThrow(() -> new CustomException(ErrorCode.TARGET_NOT_SET)));
-        boolean zipped = upload.getFileName().toLowerCase(Locale.ROOT).endsWith(".zip");
-        var candidates = reader.read(storage.pathFor(uploadId), zipped, period.from(), period.to()).stream()
-                .map(ChatGptExportReader.ExportConversation::externalId).collect(Collectors.toSet());
-        if (!candidates.containsAll(selectedIds)) {
-            throw new CustomException(ErrorCode.INVALID_REQUEST, "분석 대상 기간의 업로드 후보만 선택할 수 있습니다.");
+        var allowedTypes = taskTypes.findByTeamIdAndIsActiveTrueOrderById(teamId).stream()
+                .collect(Collectors.toMap(TeamTaskType::getId, Function.identity()));
+        var selected = candidates.findByUploadIdAndSelectionIdIn(uploadId, selections.keySet());
+        if (selected.size() != selections.size() || selected.stream().anyMatch(candidate ->
+                !candidate.isSelectable() || !allowedTypes.containsKey(selections.get(candidate.getSelectionId())))) {
+            throw new CustomException(ErrorCode.VALIDATION_FAILED);
         }
-        upload.startAnalysis(selections.size());
-        events.publishEvent(new AnalysisJob(uploadId, upload.getFileName(), period, List.copyOf(selections)));
-        return new AnalysisStartResponse(uploadId, UploadStatus.ANALYZING);
+        var externalIds = selected.stream().map(UploadCandidate::getExternalId).collect(Collectors.toSet());
+        boolean zipped = upload.getFileName().toLowerCase(Locale.ROOT).endsWith(".zip");
+        var source = reader.readSelected(file, zipped, externalIds);
+        if (!source.keySet().equals(externalIds)) {
+            throw new CustomException(ErrorCode.VALIDATION_FAILED);
+        }
+
+        var analysis = analyses.save(Analysis.builder().upload(upload).team(upload.getTeam())
+                .user(upload.getUploader()).settings(current).idempotencyKey(key).requestHash(hash)
+                .selectedCount(selected.size()).build());
+        for (UploadCandidate candidate : selected) {
+            var taskType = allowedTypes.get(selections.get(candidate.getSelectionId()));
+            var turns = ChatGptConversationBranch.restore(source.get(candidate.getExternalId()));
+            var version = saveVersion(upload, candidate, taskType, turns);
+            items.save(AnalysisItem.builder().analysis(analysis).version(version).team(upload.getTeam())
+                    .user(upload.getUploader()).taskType(taskType).conversationDate(version.getConversationDate()).build());
+        }
+        upload.consume();
+        return response(analysis);
+    }
+
+    private ConversationVersion saveVersion(Upload upload, UploadCandidate candidate, TeamTaskType taskType,
+                                             java.util.List<ChatGptConversationBranch.Turn> turns) {
+        var date = candidate.getStartedAt().toLocalDate();
+        var conversation = conversations.findByTeamIdAndUserIdAndExternalId(upload.getTeam().getId(),
+                upload.getUploader().getId(), candidate.getExternalId()).orElseGet(() ->
+                conversations.save(Conversation.builder().upload(upload).team(upload.getTeam())
+                        .user(upload.getUploader()).taskType(taskType).externalId(candidate.getExternalId())
+                        .title(candidate.getTitle()).startedAt(candidate.getStartedAt()).conversationDate(date)
+                        .turnCount(0).estimatedTokens(0).isSuccess(false).build()));
+        if (versions.existsByConversationIdAndContentHash(conversation.getId(), candidate.getContentHash())) {
+            throw new CustomException(ErrorCode.VALIDATION_FAILED);
+        }
+        int inputVersion = versions.findFirstByConversationIdOrderByInputVersionDesc(conversation.getId())
+                .map(ConversationVersion::getInputVersion).orElse(0) + 1;
+        var version = versions.save(ConversationVersion.builder().conversation(conversation).sourceUpload(upload)
+                .inputVersion(inputVersion).contentHash(candidate.getContentHash()).title(candidate.getTitle())
+                .startedAt(candidate.getStartedAt().atZone(KST).toInstant()).conversationDate(date)
+                .turnCount(turns.size()).build());
+        var rows = new ArrayList<Message>(turns.size());
+        for (int index = 0; index < turns.size(); index++) {
+            var turn = turns.get(index);
+            rows.add(Message.builder().conversation(conversation).version(version).idx(index)
+                    .role(turn.role()).content(turn.content()).createdAt(turn.createdAt()).build());
+        }
+        messages.saveAll(rows);
+        return version;
+    }
+
+    private static String validateKey(String key) {
+        try {
+            String normalized = UUID.fromString(key).toString();
+            if (normalized.equalsIgnoreCase(key)) {
+                return normalized;
+            }
+        } catch (IllegalArgumentException | NullPointerException ignored) {
+            // Malformed and missing keys have the same response.
+        }
+        throw new CustomException(ErrorCode.VALIDATION_FAILED);
+    }
+
+    private static LinkedHashMap<String, Long> validateSelections(AnalysisStartRequest request) {
+        if (request.settingsVersion() == null || request.settingsVersion() < 0 || request.selections() == null
+                || request.selections().isEmpty() || request.selections().size() > 100) {
+            throw new CustomException(ErrorCode.VALIDATION_FAILED);
+        }
+        var selections = new LinkedHashMap<String, Long>();
+        for (var selection : request.selections()) {
+            if (selection == null || selection.selectionId() == null || selection.selectionId().isBlank()
+                    || selection.selectionId().length() > 40 || selection.taskTypeId() == null
+                    || selection.taskTypeId() <= 0
+                    || selections.putIfAbsent(selection.selectionId(), selection.taskTypeId()) != null) {
+                throw new CustomException(ErrorCode.VALIDATION_FAILED);
+            }
+        }
+        return selections;
+    }
+
+    private static String hashRequest(Long uploadId, AnalysisStartRequest request) {
+        var canonical = new StringBuilder().append(uploadId).append(':').append(request.settingsVersion());
+        request.selections().forEach(selection -> canonical.append(':').append(selection.selectionId().length())
+                .append(':').append(selection.selectionId()).append(':').append(selection.taskTypeId()));
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(canonical.toString().getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static AnalysisStartResponse response(Analysis analysis) {
+        String url = "/api/v1/analyses/" + analysis.getId();
+        return new AnalysisStartResponse(analysis.getId(), analysis.getUpload().getId(), AnalysisStatus.QUEUED,
+                analysis.getSelectedCount(), url, url + "/items", 3);
     }
 }

@@ -11,6 +11,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface UploadRepository extends JpaRepository<Upload, Long> {
+    java.util.List<Upload> findTop100ByStatusAndOriginalCleanedFalseOrderByConsumedAtAsc(
+            com.babylion.team1.domain.upload.entity.UploadStatus status);
+
 
     Page<Upload> findByTeamIdAndUploaderIdOrderByUploadedAtDescIdDesc(
             Long teamId, Long uploaderId, Pageable pageable);

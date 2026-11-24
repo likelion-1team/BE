@@ -98,6 +98,22 @@ public class Upload {
 		}
 	}
 
+	@Column(name = "consumed_at")
+	private LocalDateTime consumedAt;
+
+	@ColumnDefault("false")
+	@Column(name = "original_cleaned", nullable = false)
+	private boolean originalCleaned;
+
+	public void markOriginalCleaned() {
+		originalCleaned = true;
+	}
+
+	public void consume() {
+		status = UploadStatus.CONSUMED;
+		consumedAt = LocalDateTime.now();
+	}
+
 	public boolean isUploadedBy(Long userId) {
 		return uploader.getId().equals(userId);
 	}

@@ -53,7 +53,7 @@ class AnalysisPersistence {
         int skipped = 0;
         for (Prepared item : prepared) {
             String externalId = item.metadata().externalId();
-            var existing = conversations.findByTeamIdAndExternalId(teamId, externalId).orElse(null);
+            var existing = conversations.findByTeamIdAndUserIdAndExternalId(teamId, upload.getUploader().getId(), externalId).orElse(null);
             if (existing != null && !existing.getUpload().getId().equals(uploadId)) {
                 skipped++;
                 continue;

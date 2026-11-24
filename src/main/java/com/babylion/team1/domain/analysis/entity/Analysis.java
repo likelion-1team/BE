@@ -90,4 +90,8 @@ public class Analysis {
 
     @Column(name = "finished_at", columnDefinition = "DATETIME(6)")
     private Instant finishedAt;
+
+    public void releaseExpiredKey() {
+        idempotencyKey = "expired:" + id;
+    }
 }

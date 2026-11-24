@@ -224,6 +224,67 @@ class UploadControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
     }
 
+    @Test
+    void acceptsVersionedSelectionAndReplaysTheSameAnalysis() throws Exception {
+        User uploader = User.builder().name("분석 테스트").email("analysis-it-" + UUID.randomUUID() + "@test.com")
+                .passwordHash("test-password-hash").build();
+        entityManager.persist(uploader);
+        Team team = saveTeam(uploader, "분석 테스트 팀");
+        var settings = TeamSettings.createDefault(team);
+        settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        entityManager.persist(settings);
+        var type = TeamTaskType.builder().team(team).name("보고서").successDefinition("제출").build();
+        entityManager.persist(type);
+        entityManager.flush();
+
+        long userId = uploader.getId();
+        long teamId = team.getId();
+        long typeId = type.getId();
+        long epoch = TARGET_DATE.atTime(10, 0).atZone(ZoneId.of("Asia/Seoul")).toEpochSecond();
+        String externalId = UUID.randomUUID().toString();
+        String export = """
+                [{"id":"%s","title":"테스트","create_time":%d,"current_node":"answer","mapping":{
+                  "question":{"parent":null,"children":["answer"],"message":{
+                    "author":{"role":"user"},"content":{"parts":["hello"]},"create_time":%d}},
+                  "answer":{"parent":"question","children":[],"message":{
+                    "author":{"role":"assistant"},"content":{"parts":["world"]},"metadata":{"model_slug":"gpt-4o"},"create_time":%d}}
+                }}]
+                """.formatted(externalId, epoch, epoch, epoch + 1);
+        String bearer = "Bearer " + accessTokens.create(userId);
+        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+                        .file(new MockMultipartFile("file", "conversations.json", "application/json",
+                                export.getBytes(StandardCharsets.UTF_8)))
+                        .header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isCreated());
+        entityManager.flush();
+        Long uploadId = jdbc.queryForObject("select id from uploads where team_id = ?", Long.class, teamId);
+        String selectionId = jdbc.queryForObject(
+                "select selection_id from upload_candidates where upload_id = ?", String.class, uploadId);
+        String key = UUID.randomUUID().toString();
+        String body = """
+                {"settingsVersion":0,"selections":[{"selectionId":"%s","taskTypeId":%d}]}
+                """.formatted(selectionId, typeId);
+        var request = post("/api/v1/uploads/{uploadId}/analyses", uploadId)
+                .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
+                .header("Idempotency-Key", key);
+        mockMvc.perform(request.content(body.replace(":0,", ":1,")))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+        mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.status").value("QUEUED")).andExpect(jsonPath("$.data.selectedCount").value(1));
+        entityManager.flush();
+        Long analysisId = jdbc.queryForObject("select id from analyses where upload_id = ?", Long.class, uploadId);
+        mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.analysisId").value(analysisId));
+        mockMvc.perform(request.content(body.replace(":0,", ":1,")))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"));
+        assertThat(jdbc.queryForObject("select status from uploads where id = ?", String.class, uploadId))
+                .isEqualTo("CONSUMED");
+        assertThat(jdbc.queryForList("""
+                select m.content from messages m join analysis_items i on i.version_id = m.version_id
+                where i.analysis_id = ? order by m.idx
+                """, String.class, analysisId)).containsExactly("hello", "world");
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void analyzesUploadedConversationAndReturnsFallbackOrGeneratedPrompt(boolean geminiSucceeds) throws Exception {
@@ -290,13 +351,9 @@ class UploadControllerIntegrationTest {
                     TARGET_DATE.plusDays(1), TARGET_DATE.plusDays(1), teamId);
             Files.delete(uploadDirectory.resolve(uploadId + ".period"));
 
-            mockMvc.perform(post("/api/v1/uploads/{uploadId}/analyses", uploadId)
-                            .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
-                            .content("""
-                                    {"selections":[{"externalId":"%s","taskTypeId":%d}]}
-                                    """.formatted(externalId, typeId)))
-                    .andExpect(status().isAccepted())
-                    .andExpect(jsonPath("$.data.status").value("ANALYZING"));
+            jdbc.update("update uploads set status = 'ANALYZING', selected_count = 1 where id = ?", uploadId);
+            new com.babylion.team1.domain.upload.service.LegacyAnalysisWorkerTestDriver(applicationContext)
+                    .run(uploadId, "conversations.json", TARGET_DATE, externalId, typeId);
 
             long deadline = System.nanoTime() + java.time.Duration.ofSeconds(15).toNanos();
             Path original = uploadDirectory.resolve(uploadId + ".export");
@@ -349,13 +406,6 @@ class UploadControllerIntegrationTest {
                     .andExpect(jsonPath("$.data.example.after").value(expected));
             verify(http, times(geminiSucceeds ? 1 : 2)).send(any(HttpRequest.class),
                     org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any());
-            mockMvc.perform(post("/api/v1/uploads/{uploadId}/analyses", uploadId)
-                            .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
-                            .content("""
-                                    {"selections":[{"externalId":"%s","taskTypeId":%d}]}
-                                    """.formatted(externalId, typeId)))
-                    .andExpect(status().isConflict())
-                    .andExpect(jsonPath("$.code").value("ANALYSIS_ALREADY_COMPLETED"));
         } finally {
             ReflectionTestUtils.setField(gemini, "http", originalHttp);
             ReflectionTestUtils.setField(gemini, "apiKey", originalKey);

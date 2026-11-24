@@ -9,7 +9,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface ConversationRepository extends JpaRepository<Conversation, Long> {
 
-    java.util.Optional<Conversation> findByTeamIdAndExternalId(Long teamId, String externalId);
+    java.util.Optional<Conversation> findByTeamIdAndUserIdAndExternalId(Long teamId, Long userId, String externalId);
 
     List<Conversation> findByUploadId(Long uploadId);
 

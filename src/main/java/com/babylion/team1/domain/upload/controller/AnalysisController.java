@@ -6,7 +6,8 @@ import com.babylion.team1.domain.upload.dto.response.AnalysisStatusResponse;
 import com.babylion.team1.domain.upload.service.AnalysisStartService;
 import com.babylion.team1.domain.upload.service.AnalysisStatusService;
 import com.babylion.team1.global.response.ApiResponse;
-import jakarta.validation.Valid;
+import java.net.URI;
+import org.springframework.web.bind.annotation.RequestHeader;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -35,8 +36,10 @@ public class AnalysisController {
     public ResponseEntity<ApiResponse<AnalysisStartResponse>> start(
             @PathVariable Long uploadId,
             @AuthenticationPrincipal Long userId,
-            @Valid @RequestBody AnalysisStartRequest request) {
-        var response = analysisStartService.start(uploadId, userId, request.selections());
-        return ResponseEntity.accepted().body(ApiResponse.success("S202", "분석 시작", response));
+            @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestBody AnalysisStartRequest request) {
+        var response = analysisStartService.start(uploadId, userId, idempotencyKey, request);
+        return ResponseEntity.accepted().location(URI.create(response.statusUrl()))
+                .body(ApiResponse.success("S202", "분석 요청 수락", response));
     }
 }

@@ -18,7 +18,7 @@ import org.hibernate.annotations.ColumnDefault;
 @Entity
 @Table(
 	name = "conversations",
-	uniqueConstraints = @UniqueConstraint(name = "uk_conversations_team_external", columnNames = {"team_id", "external_id"}),
+	uniqueConstraints = @UniqueConstraint(name = "uk_conversations_owner_external", columnNames = {"team_id", "user_id", "external_id"}),
 	indexes = {
 		// 팀장 집계용
 		@Index(name = "idx_conversations_team_task_date", columnList = "team_id, task_type_id, conversation_date"),

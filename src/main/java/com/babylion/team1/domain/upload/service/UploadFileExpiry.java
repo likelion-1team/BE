@@ -41,6 +41,19 @@ class UploadFileExpiry {
     }
 
     @Scheduled(fixedDelay = 60_000)
+    void cleanConsumedOriginals() {
+        transaction.executeWithoutResult(status -> uploadRepository
+                .findTop100ByStatusAndOriginalCleanedFalseOrderByConsumedAtAsc(UploadStatus.CONSUMED)
+                .forEach(upload -> {
+                    storage.deleteUpload(upload.getId());
+                    if (Files.notExists(storage.pathFor(upload.getId()))) {
+                        candidates.deleteByUploadId(upload.getId());
+                        upload.markOriginalCleaned();
+                    }
+                }));
+    }
+
+    @Scheduled(fixedDelay = 60_000)
     void expireCandidates() {
         LocalDateTime cutoff = LocalDateTime.now().minusHours(1);
         transaction.executeWithoutResult(status -> candidates.deleteExpired(cutoff));

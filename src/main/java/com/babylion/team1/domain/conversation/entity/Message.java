@@ -14,7 +14,8 @@ import org.hibernate.annotations.ColumnDefault;
 @Entity
 @Table(
 	name = "messages",
-	uniqueConstraints = @UniqueConstraint(name = "uk_messages_conversation_idx", columnNames = {"conversation_id", "idx"})
+	indexes = @Index(name = "idx_messages_conversation_id", columnList = "conversation_id"),
+	uniqueConstraints = @UniqueConstraint(name = "uk_messages_version_idx", columnNames = {"version_id", "idx"})
 )
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -27,6 +28,10 @@ public class Message {
 	@ManyToOne(fetch = FetchType.LAZY)
 	@JoinColumn(name = "conversation_id", nullable = false)
 	private Conversation conversation;
+
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "version_id")
+	private ConversationVersion version;
 
 	/** 대화 안 순서(0부터) */
 	@Column(name = "idx", nullable = false)
@@ -49,9 +54,10 @@ public class Message {
 	private LocalDateTime createdAt;
 
 	@Builder
-	private Message(Conversation conversation, Integer idx, MessageRole role, String content, Boolean isRework,
+	private Message(Conversation conversation, ConversationVersion version, Integer idx, MessageRole role, String content, Boolean isRework,
 		LocalDateTime createdAt) {
 		this.conversation = conversation;
+		this.version = version;
 		this.idx = idx;
 		this.role = role;
 		this.content = content;
