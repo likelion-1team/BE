@@ -2,34 +2,73 @@ package com.babylion.team1.domain.team.dto.response;
 
 import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
+import com.babylion.team1.global.policy.ServerPolicy;
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 
+/** 저장 전이면 version은 0, taskType은 null이다. */
 public record TeamSettingsResponse(
-        List<TaskType> taskTypes,
+        int version,
+        TaskType taskType,
         LocalDate targetFrom,
         LocalDate targetTo,
         LocalDate onboardingStartDate,
         Integer targetCount,
-        Integer minDailyConversations,
-        Integer hourlyLaborCost
+        OffsetDateTime updatedAt,
+        Policies policies
 ) {
 
-    public static TeamSettingsResponse from(TeamSettings settings, List<TeamTaskType> taskTypes) {
+    public static TeamSettingsResponse from(TeamSettings settings, TeamTaskType taskType) {
         return new TeamSettingsResponse(
-                taskTypes.stream().map(TaskType::from).toList(),
+                settings.getVersion(),
+                taskType == null ? null : TaskType.from(taskType),
                 settings.getTargetFrom(),
                 settings.getTargetTo(),
                 settings.getOnboardingStartDate(),
                 settings.getTargetCount(),
-                settings.getMinDailyConversations(),
-                settings.getHourlyLaborCost());
+                settings.updatedAtInKst(),
+                Policies.current());
     }
 
-    public record TaskType(Long id, String name, String successDefinition) {
+    /** 설정 행이 없는 팀 */
+    public static TeamSettingsResponse unset() {
+        return new TeamSettingsResponse(0, null, null, null, null, null, null, Policies.current());
+    }
 
+    public record TaskType(
+            Long taskTypeId,
+            String name,
+            List<String> successConditions,
+            List<String> failureConditions,
+            List<String> unknownConditions
+    ) {
+
+        /** 조건 목록을 저장하기 전까지는 기존 성공 정의를 성공 조건 하나로 반환한다. */
         private static TaskType from(TeamTaskType taskType) {
-            return new TaskType(taskType.getId(), taskType.getName(), taskType.getSuccessDefinition());
+            return new TaskType(taskType.getId(), taskType.getName(),
+                    List.of(taskType.getSuccessDefinition()), List.of(), List.of());
+        }
+    }
+
+    public record Policies(
+            int policyVersion,
+            int minSampleSize,
+            int minTeamContributors,
+            BigDecimal minOutcomeConfirmationRate,
+            int uploadRetentionMinutes,
+            int maxSelectionsPerRequest
+    ) {
+
+        private static Policies current() {
+            return new Policies(
+                    ServerPolicy.VERSION,
+                    ServerPolicy.MIN_SAMPLE_SIZE,
+                    ServerPolicy.MIN_TEAM_CONTRIBUTORS,
+                    ServerPolicy.MIN_OUTCOME_CONFIRMATION_RATE,
+                    ServerPolicy.UPLOAD_RETENTION_MINUTES,
+                    ServerPolicy.MAX_SELECTIONS_PER_REQUEST);
         }
     }
 }
