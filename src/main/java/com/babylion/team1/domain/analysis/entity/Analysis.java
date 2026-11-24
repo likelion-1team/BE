@@ -98,6 +98,17 @@ public class Analysis {
         }
     }
 
+    public void updateStage(Stage stage) {
+        if (status == AnalysisStatus.RUNNING) {
+            this.stage = stage.name();
+        }
+    }
+
+    public enum Stage {
+        ASSESSING,
+        GENERATING_FEEDBACK
+    }
+
     public void recordResult(boolean success) {
         completedCount++;
         if (success) {
@@ -109,6 +120,7 @@ public class Analysis {
             status = failedCount == 0 ? AnalysisStatus.SUCCEEDED
                     : succeededCount == 0 ? AnalysisStatus.FAILED : AnalysisStatus.PARTIALLY_SUCCEEDED;
             finishedAt = Instant.now();
+            stage = null;
         }
     }
 

@@ -1,6 +1,7 @@
 package com.babylion.team1.domain.upload.service;
 
 import com.babylion.team1.domain.analysis.entity.AnalysisItemStatus;
+import com.babylion.team1.domain.analysis.entity.Analysis.Stage;
 import com.babylion.team1.domain.analysis.entity.ModelCall;
 import com.babylion.team1.domain.analysis.repository.ModelCallRepository;
 import com.babylion.team1.domain.analysis.entity.AnalysisStatus;
@@ -66,7 +67,7 @@ class VersionedAnalysisWorker {
             return;
         }
         try {
-            Result result = analyze(input);
+            Result result = analyze(analysisId, input);
             transaction.executeWithoutResult(status -> save(analysisId, input.itemId(), result));
         } catch (RuntimeException exception) {
             String code = exception instanceof GeminiFeedbackClient.ModelFailure
@@ -101,6 +102,7 @@ class VersionedAnalysisWorker {
         var version = item.getVersion();
         var rows = messages.findByVersionIdOrderByIdxAsc(version.getId());
         item.begin(now.plus(Duration.ofMinutes(15)));
+        job.updateStage(Stage.ASSESSING);
         if (rows.isEmpty() || version.getDeletedAt() != null) {
             item.fail("ANALYSIS_SOURCE_UNAVAILABLE");
             job.recordResult(false);
@@ -144,15 +146,23 @@ class VersionedAnalysisWorker {
         });
     }
 
-    private Result analyze(Input input) {
+    private Result analyze(Long analysisId, Input input) {
         var turns = input.turns();
         var assessment = gemini.assess(input.taskName(), input.successDefinition(), assessmentMessages(turns),
                 audit(input.itemId(), ModelCall.Purpose.ASSESSMENT));
         var result = metrics.calculate(turns);
         var feedbackAudit = audit(input.itemId(), ModelCall.Purpose.FEEDBACK);
-        var suggestions = rules.detect(result).stream().filter(finding -> !finding.evidence().isEmpty()
-                && finding.evidence().stream().allMatch(index -> index >= 0 && index < turns.size()))
-                .map(finding -> {
+        var findings = rules.detect(result).stream().filter(finding -> !finding.evidence().isEmpty()
+                && finding.evidence().stream().allMatch(index -> index >= 0 && index < turns.size())).toList();
+        if (!findings.isEmpty()) {
+            transaction.executeWithoutResult(status -> {
+                var job = analyses.lockById(analysisId).orElseThrow();
+                if (items.findById(input.itemId()).orElseThrow().getStatus() == AnalysisItemStatus.RUNNING) {
+                    job.updateStage(Stage.GENERATING_FEEDBACK);
+                }
+            });
+        }
+        var suggestions = findings.stream().map(finding -> {
                     String question = turns.get(finding.evidence().get(0)).content();
                     String excerpt = question.substring(0, question.offsetByCodePoints(0,
                             Math.min(1000, question.codePointCount(0, question.length()))));

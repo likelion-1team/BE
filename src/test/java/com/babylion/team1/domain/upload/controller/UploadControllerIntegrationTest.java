@@ -296,7 +296,8 @@ class UploadControllerIntegrationTest {
         mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("QUEUED"))
-                .andExpect(jsonPath("$.data.progressPercent").value(0));
+                .andExpect(jsonPath("$.data.progressPercent").value(0))
+                .andExpect(jsonPath("$.data.stage").value(nullValue()));
         mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer).param("size", "1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].status").value("QUEUED"))
@@ -348,10 +349,23 @@ class UploadControllerIntegrationTest {
             when(unavailable.statusCode()).thenReturn(503);
             var provider = when(http.send(any(HttpRequest.class),
                     org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()));
+            var observedStages = new java.util.concurrent.CopyOnWriteArrayList<String>();
             switch (scenario) {
                 case "invalid-response" -> provider.thenReturn(invalidResponse);
                 case "transient-failure" -> provider.thenReturn(unavailable);
-                default -> provider.thenReturn(unavailable, assessmentResponse, feedbackResponse);
+                default -> provider.thenAnswer(invocation -> {
+                    String statusResponse = mockMvc.perform(get(statusPath, analysisId)
+                                    .header(HttpHeaders.AUTHORIZATION, bearer))
+                            .andReturn().getResponse().getContentAsString();
+                    observedStages.add(com.jayway.jsonpath.JsonPath.<String>read(statusResponse, "$.data.stage"));
+                    return unavailable;
+                }).thenReturn(assessmentResponse).thenAnswer(invocation -> {
+                    String statusResponse = mockMvc.perform(get(statusPath, analysisId)
+                                    .header(HttpHeaders.AUTHORIZATION, bearer))
+                            .andReturn().getResponse().getContentAsString();
+                    observedStages.add(com.jayway.jsonpath.JsonPath.<String>read(statusResponse, "$.data.stage"));
+                    return feedbackResponse;
+                });
             }
             Long priorVersionId = null;
             if (fails) {
@@ -436,10 +450,12 @@ class UploadControllerIntegrationTest {
                     return;
                 }
                 assertThat(state).isEqualTo("SUCCEEDED");
+                assertThat(observedStages).containsExactly("ASSESSING", "GENERATING_FEEDBACK");
                 mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
                         .andExpect(status().isOk())
                         .andExpect(jsonPath("$.data.succeededCount").value(1))
-                        .andExpect(jsonPath("$.data.progressPercent").value(100));
+                        .andExpect(jsonPath("$.data.progressPercent").value(100))
+                        .andExpect(jsonPath("$.data.stage").value(nullValue()));
                 mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
                         .andExpect(status().isOk())
                         .andExpect(jsonPath("$.data.items[0].status").value("SUCCEEDED"))
