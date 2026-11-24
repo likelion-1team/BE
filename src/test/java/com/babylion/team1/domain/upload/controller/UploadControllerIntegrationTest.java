@@ -410,6 +410,43 @@ class UploadControllerIntegrationTest {
                         .andExpect(jsonPath("$.data.items[0].status").value("SUCCEEDED"))
                         .andExpect(jsonPath("$.data.items[0].aiAssessment.outcome").value("SUCCESS"))
                         .andExpect(jsonPath("$.data.items[0].feedbackIds[0]").isNumber());
+                Long itemId = jdbc.queryForObject("select id from analysis_items where analysis_id = ?", Long.class, analysisId);
+                String outcomePath = "/api/v1/analysis-items/{itemId}/outcome";
+                var outcome = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(outcomePath, itemId)
+                        .header(HttpHeaders.AUTHORIZATION, bearer).contentType(MediaType.APPLICATION_JSON);
+                mockMvc.perform(outcome.content("""
+                        {"expectedVersion":0,"outcome":"FAILURE","note":"개인 메모"}
+                        """))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.version").value(1))
+                        .andExpect(jsonPath("$.data.source").value("SELF_REPORT"))
+                        .andExpect(jsonPath("$.data.note").doesNotExist());
+                mockMvc.perform(outcome.content("""
+                        {"expectedVersion":0,"outcome":"SUCCESS"}
+                        """))
+                        .andExpect(status().isConflict())
+                        .andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+                mockMvc.perform(outcome.content("""
+                        {"expectedVersion":1,"outcome":"INVALID"}
+                        """))
+                        .andExpect(status().isUnprocessableContent())
+                        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+                mockMvc.perform(outcome.content("""
+                        {"expectedVersion":1,"outcome":"UNKNOWN"}
+                        """))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.version").value(2));
+                mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.items[0].outcomeAssessment.version").value(2))
+                        .andExpect(jsonPath("$.data.items[0].outcomeAssessment.outcome").value("UNKNOWN"))
+                        .andExpect(jsonPath("$.data.items[0].aiAssessment.outcome").value("SUCCESS"));
+                assertThat(jdbc.queryForList(
+                        "select outcome from outcome_assessments where item_id = ? order by version", String.class, itemId))
+                        .containsExactly("FAILURE", "UNKNOWN");
+                assertThat(jdbc.queryForObject(
+                        "select confirmed_outcome from analysis_items where id = ?", String.class, itemId)).isEqualTo("UNKNOWN");
+
 
                 assertThat(jdbc.queryForObject(
                         "select status from analysis_items where analysis_id = ?", String.class, analysisId))

@@ -15,10 +15,12 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 @Entity
+@DynamicUpdate
 @Table(name = "analysis_items",
     uniqueConstraints = @UniqueConstraint(name = "uk_analysis_items_analysis_version",
         columnNames = {"analysis_id", "version_id"}),
@@ -165,5 +167,8 @@ public class AnalysisItem {
 
     public void retire() {
         current = false;
+    }
+    public void confirmOutcome(AnalysisOutcome outcome) {
+        confirmedOutcome = outcome;
     }
 }

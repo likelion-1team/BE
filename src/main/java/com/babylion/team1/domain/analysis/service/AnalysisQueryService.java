@@ -4,6 +4,9 @@ import com.babylion.team1.domain.analysis.dto.AnalysisStatusResponse;
 import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse;
 import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse.AiAssessment;
 import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse.Item;
+import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse.OutcomeAssessment;
+import com.babylion.team1.domain.analysis.dto.OutcomeAssessmentResponse;
+import com.babylion.team1.domain.analysis.repository.OutcomeAssessmentRepository;
 import com.babylion.team1.domain.analysis.entity.AnalysisItem;
 import com.babylion.team1.domain.analysis.repository.AnalysisItemRepository;
 import com.babylion.team1.domain.feedback.repository.FeedbackEvidenceRepository;
@@ -31,6 +34,7 @@ public class AnalysisQueryService {
     private final AnalysisRepository analyses;
     private final AnalysisItemRepository items;
     private final FeedbackEvidenceRepository evidence;
+    private final OutcomeAssessmentRepository outcomes;
 
     public AnalysisStatusResponse getStatus(Long analysisId, Long userId) {
         Analysis analysis = requireOwnedAnalysis(analysisId, userId);
@@ -60,11 +64,17 @@ public class AnalysisQueryService {
             feedbackByConversation.computeIfAbsent(row.getConversationId(), ignored -> new ArrayList<>())
                     .add(row.getFeedbackId());
         }
+        var outcomesByItem = new HashMap<Long, OutcomeAssessment>();
+        for (var assessment : outcomes.findLatestByItemIds(results.stream().map(AnalysisItem::getId).toList())) {
+            var outcome = OutcomeAssessmentResponse.from(assessment);
+            outcomesByItem.put(outcome.itemId(), new OutcomeAssessment(outcome.version(), outcome.outcome().name(),
+                    outcome.source(), outcome.assessedAt()));
+        }
         var response = results.stream().map(item -> {
             Long conversationId = item.getVersion().getConversation().getId();
             return new Item(item.getId(), conversationId, item.getVersion().getId(), item.getStatus().name(),
                     name(item.getScopeClassification()), item.getFailureCode(),
-                    feedbackByConversation.getOrDefault(conversationId, List.of()), assessment(item), null, null);
+                    feedbackByConversation.getOrDefault(conversationId, List.of()), assessment(item), outcomesByItem.get(item.getId()), null);
         }).toList();
         return new AnalysisItemsResponse(response, page, size, results.getTotalElements());
     }
