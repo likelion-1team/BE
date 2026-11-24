@@ -446,6 +446,43 @@ class UploadControllerIntegrationTest {
                         .containsExactly("FAILURE", "UNKNOWN");
                 assertThat(jdbc.queryForObject(
                         "select confirmed_outcome from analysis_items where id = ?", String.class, itemId)).isEqualTo("UNKNOWN");
+                var rework = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .put("/api/v1/analysis-items/{itemId}/rework-assessment", itemId)
+                        .header(HttpHeaders.AUTHORIZATION, bearer).contentType(MediaType.APPLICATION_JSON);
+                mockMvc.perform(rework.content("""
+                        {"expectedVersion":0,"type":"ERROR_CORRECTION","note":"개인 메모"}
+                        """))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.version").value(1))
+                        .andExpect(jsonPath("$.data.source").value("SELF_REPORT"))
+                        .andExpect(jsonPath("$.data.note").doesNotExist());
+                mockMvc.perform(rework.content("""
+                        {"expectedVersion":0,"type":"NONE"}
+                        """))
+                        .andExpect(status().isConflict())
+                        .andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+                mockMvc.perform(rework.content("""
+                        {"expectedVersion":1,"type":"INVALID"}
+                        """))
+                        .andExpect(status().isUnprocessableContent())
+                        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+                mockMvc.perform(rework.content("""
+                        {"expectedVersion":1,"type":"NONE"}
+                        """))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.version").value(2));
+                mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.items[0].reworkAssessment.version").value(2))
+                        .andExpect(jsonPath("$.data.items[0].reworkAssessment.type").value("NONE"))
+                        .andExpect(jsonPath("$.data.items[0].outcomeAssessment.outcome").value("UNKNOWN"))
+                        .andExpect(jsonPath("$.data.items[0].aiAssessment.outcome").value("SUCCESS"));
+                assertThat(jdbc.queryForList(
+                        "select type from rework_assessments where item_id = ? order by version", String.class, itemId))
+                        .containsExactly("ERROR_CORRECTION", "NONE");
+                assertThat(jdbc.queryForObject("select confirmed_rework_type from analysis_items where id = ?",
+                        String.class, itemId)).isEqualTo("NONE");
+
 
 
                 assertThat(jdbc.queryForObject(
