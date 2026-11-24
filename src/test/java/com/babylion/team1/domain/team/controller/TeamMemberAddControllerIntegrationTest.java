@@ -78,8 +78,8 @@ class TeamMemberAddControllerIntegrationTest {
                 .andExpect(jsonPath("$.message").value("팀원 추가 성공"))
                 .andExpect(jsonPath("$.data.userId").value(invitee.getId()))
                 .andExpect(jsonPath("$.data.name").value(invitee.getName()))
+                .andExpect(jsonPath("$.data.email").value(invitee.getEmail()))
                 .andExpect(jsonPath("$.data.role").value("MEMBER"))
-                .andExpect(jsonPath("$.data.email").doesNotExist())
                 .andExpect(jsonPath("$.errors").value(nullValue()))
                 .andExpect(jsonPath("$.timestamp", endsWith("+09:00")));
 
@@ -91,20 +91,27 @@ class TeamMemberAddControllerIntegrationTest {
     }
 
     @Test
-    void leaderOfAnotherTeamCannotAddAnyoneToDestinationTeam() throws Exception {
+    void permissionsDependOnTheRoleInTheDestinationTeam() throws Exception {
         User requester = saveUser("Other team leader");
         saveTeam("Requester team", requester);
         Team destination = saveTeam("Destination team", saveUser("Destination leader"));
         User invitee = saveUser("Invited user");
+        String unregisteredEmail = UUID.randomUUID() + "@example.com";
 
         addMember(destination, requester, invitee.getEmail())
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        addMember(destination, requester, unregisteredEmail)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
 
         teamMemberRepository.save(TeamMember.member(destination, requester));
         addMember(destination, requester, invitee.getEmail())
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
+        addMember(destination, requester, unregisteredEmail)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
 
         assertThat(teamMemberRepository.findByTeamIdAndUserId(destination.getId(), invitee.getId())).isEmpty();
     }
@@ -116,7 +123,7 @@ class TeamMemberAddControllerIntegrationTest {
         mockMvc.perform(request(Long.MAX_VALUE, emailBody(requester.getEmail()))
                         .header(HttpHeaders.AUTHORIZATION, bearer(requester)))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("TEAM_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
 
     @Test
