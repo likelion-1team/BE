@@ -58,6 +58,12 @@ public class AnalysisItem {
     @JoinColumn(name = "task_type_id", nullable = false)
     private TeamTaskType taskType;
 
+    @Column(name = "task_name_snapshot", length = 50)
+    private String taskNameSnapshot;
+
+    @Column(name = "success_definition_snapshot", length = 500)
+    private String successDefinitionSnapshot;
+
     @Column(name = "conversation_date", nullable = false)
     private LocalDate conversationDate;
 
@@ -122,6 +128,15 @@ public class AnalysisItem {
 
     @Column(name = "finished_at", columnDefinition = "DATETIME(6)")
     private Instant finishedAt;
+
+    public void recordAssessment(ScopeClassification scope, AnalysisOutcome outcome, AnalysisReworkType reworkType,
+                                 List<String> evidenceKeys, String rubric) {
+        scopeClassification = scope;
+        aiOutcome = outcome;
+        aiReworkType = reworkType;
+        aiEvidenceMessageKeys = List.copyOf(evidenceKeys);
+        rubricVersion = rubric;
+    }
 
     public void begin() {
         status = AnalysisItemStatus.RUNNING;

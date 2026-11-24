@@ -128,7 +128,9 @@ public class AnalysisStartService {
             var turns = ChatGptConversationBranch.restore(source.get(candidate.getExternalId()));
             var version = saveVersion(upload, candidate, taskType, turns);
             items.save(AnalysisItem.builder().analysis(analysis).version(version).team(upload.getTeam())
-                    .user(upload.getUploader()).taskType(taskType).conversationDate(version.getConversationDate()).build());
+                    .user(upload.getUploader()).taskType(taskType).taskNameSnapshot(taskType.getName())
+                    .successDefinitionSnapshot(taskType.getSuccessDefinition())
+                    .conversationDate(version.getConversationDate()).build());
         }
         upload.consume();
         return response(analysis);

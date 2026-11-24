@@ -289,26 +289,63 @@ class UploadControllerIntegrationTest {
                 where i.analysis_id = ? order by m.idx
                 """, String.class, analysisId)).containsExactly("hello", "world");
         if (commit) {
-            TestTransaction.flagForCommit();
-            TestTransaction.end();
-            long deadline = System.nanoTime() + java.time.Duration.ofSeconds(15).toNanos();
-            String state;
-            do {
-                state = jdbc.queryForObject("select status from analyses where id = ?", String.class, analysisId);
-                if ("SUCCEEDED".equals(state) || "FAILED".equals(state)) {
-                    break;
-                }
-                Thread.sleep(50);
-            } while (System.nanoTime() < deadline);
+            var gemini = applicationContext.getBean("geminiFeedbackClient");
+            var originalHttp = ReflectionTestUtils.getField(gemini, "http");
+            var originalKey = ReflectionTestUtils.getField(gemini, "apiKey");
+            var http = mock(HttpClient.class);
+            var mapper = new ObjectMapper();
+            var validAssessment = Map.of("scope", "IN_SCOPE", "outcome", "SUCCESS", "reworkType", "NONE",
+                    "evidenceMessageKeys", List.of("m_1"));
+            var invalidAssessment = new java.util.HashMap<String, Object>(validAssessment);
+            invalidAssessment.put("evidenceMessageKeys", List.of("m_999"));
+            var invalidResponse = modelResponse(mapper, invalidAssessment);
+            var assessmentResponse = modelResponse(mapper, validAssessment);
+            var feedbackResponse = modelResponse(mapper, Map.of("improvement", "개선 방안", "exampleAfter", "개선 프롬프트"));
+            when(http.send(any(HttpRequest.class), org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+                    .thenReturn(invalidResponse, assessmentResponse, feedbackResponse);
+            try {
+                ReflectionTestUtils.setField(gemini, "http", http);
+                ReflectionTestUtils.setField(gemini, "apiKey", "local-test-key");
+                TestTransaction.flagForCommit();
+                TestTransaction.end();
+                long deadline = System.nanoTime() + java.time.Duration.ofSeconds(15).toNanos();
+                String state;
+                do {
+                    state = jdbc.queryForObject("select status from analyses where id = ?", String.class, analysisId);
+                    if ("SUCCEEDED".equals(state) || "FAILED".equals(state)) {
+                        break;
+                    }
+                    Thread.sleep(50);
+                } while (System.nanoTime() < deadline);
 
-            assertThat(state).isEqualTo("SUCCEEDED");
-            assertThat(jdbc.queryForObject(
-                    "select status from analysis_items where analysis_id = ?", String.class, analysisId))
-                    .isEqualTo("SUCCEEDED");
-            assertThat(jdbc.queryForObject(
-                    "select succeeded_count from analyses where id = ?", Integer.class, analysisId)).isEqualTo(1);
-            assertThat(jdbc.queryForObject(
-                    "select count(*) from feedbacks where upload_id = ?", Long.class, uploadId)).isPositive();
+                assertThat(state).isEqualTo("SUCCEEDED");
+                assertThat(jdbc.queryForObject(
+                        "select status from analysis_items where analysis_id = ?", String.class, analysisId))
+                        .isEqualTo("SUCCEEDED");
+                assertThat(jdbc.queryForObject(
+                        "select succeeded_count from analyses where id = ?", Integer.class, analysisId)).isEqualTo(1);
+                assertThat(jdbc.queryForObject(
+                        "select count(*) from feedbacks where upload_id = ?", Long.class, uploadId)).isPositive();
+                assertThat(jdbc.queryForMap("""
+                        select scope_classification, ai_outcome, ai_rework_type, ai_evidence_message_keys
+                        from analysis_items where analysis_id = ?
+                        """, analysisId)).containsEntry("scope_classification", "IN_SCOPE")
+                        .containsEntry("ai_outcome", "SUCCESS").containsEntry("ai_rework_type", "NONE")
+                        .containsEntry("ai_evidence_message_keys", "[\"m_1\"]");
+                assertThat(jdbc.queryForList("""
+                        select concat(c.purpose, ':', c.attempt, ':', c.status)
+                        from model_calls c join analysis_items i on i.id = c.item_id
+                        where i.analysis_id = ? order by c.id
+                        """, String.class, analysisId))
+                        .containsExactly("ASSESSMENT:1:FAILED", "ASSESSMENT:2:SUCCEEDED", "FEEDBACK:1:SUCCEEDED");
+                assertThat(jdbc.queryForObject("""
+                        select sum(c.input_tokens) from model_calls c join analysis_items i on i.id = c.item_id
+                        where i.analysis_id = ?
+                        """, Integer.class, analysisId)).isEqualTo(30);
+            } finally {
+                ReflectionTestUtils.setField(gemini, "http", originalHttp);
+                ReflectionTestUtils.setField(gemini, "apiKey", originalKey);
+            }
         }
     }
 
@@ -451,6 +488,17 @@ class UploadControllerIntegrationTest {
             jdbc.update("delete from teams where id = ?", teamId);
             jdbc.update("delete from users where id = ?", userId);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private HttpResponse<String> modelResponse(ObjectMapper mapper, Map<String, ?> content) {
+        HttpResponse<String> response = mock(HttpResponse.class);
+        var part = Map.of("text", mapper.writeValueAsString(content));
+        var candidate = Map.of("content", Map.of("parts", List.of(part)));
+        when(response.statusCode()).thenReturn(200);
+        when(response.body()).thenReturn(mapper.writeValueAsString(Map.of("candidates", List.of(candidate),
+                "usageMetadata", Map.of("promptTokenCount", 10, "candidatesTokenCount", 3))));
+        return response;
     }
 
     private Team saveTeam(User uploader, String name) {
