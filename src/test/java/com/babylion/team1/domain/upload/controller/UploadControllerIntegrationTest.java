@@ -236,7 +236,8 @@ class UploadControllerIntegrationTest {
         var settings = TeamSettings.createDefault(team);
         settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
         entityManager.persist(settings);
-        var type = TeamTaskType.builder().team(team).name("보고서").successDefinition("제출").build();
+        var type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(type);
         entityManager.flush();
 
@@ -598,7 +599,8 @@ class UploadControllerIntegrationTest {
         var settings = TeamSettings.createDefault(team);
         settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
         entityManager.persist(settings);
-        var type = TeamTaskType.builder().team(team).name("보고서").successDefinition("제출").build();
+        var type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(type);
         entityManager.flush();
 
@@ -726,7 +728,8 @@ class UploadControllerIntegrationTest {
     }
 
     private void saveExistingConversation(Team team, User uploader, String externalId) {
-        TeamTaskType type = TeamTaskType.builder().team(team).name("보고서").successDefinition("제출").build();
+        TeamTaskType type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(type);
         Upload previous = Upload.builder().team(team).uploader(uploader).fileName("previous.json")
                 .conversationCount(1).build();

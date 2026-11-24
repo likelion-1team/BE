@@ -1,5 +1,7 @@
 package com.babylion.team1.domain.team.entity;
 
+import com.babylion.team1.domain.user.entity.User;
+import com.babylion.team1.global.policy.ServerPolicy;
 import jakarta.persistence.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -44,6 +46,11 @@ public class TeamSettings {
 	@Column(name = "is_current", nullable = false)
 	private boolean current = true;
 
+	/** 이 버전의 업무 유형. 팀장이 설정하기 전 NULL */
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "task_type_id")
+	private TeamTaskType taskType;
+
 	/** 분석 대상 기간. 팀장이 설정하기 전 NULL */
 	@Column(name = "target_from")
 	private LocalDate targetFrom;
@@ -69,6 +76,16 @@ public class TeamSettings {
 	@Column(name = "hourly_labor_cost", nullable = false)
 	private Integer hourlyLaborCost = DEFAULT_HOURLY_LABOR_COST;
 
+	/** 저장 당시 서버 정책 버전 */
+	@ColumnDefault("1")
+	@Column(name = "policy_version", nullable = false, updatable = false)
+	private int policyVersion = ServerPolicy.VERSION;
+
+	/** 저장한 팀장. 팀 생성 시 만든 version 0은 NULL */
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "created_by", updatable = false)
+	private User createdBy;
+
 	@Column(name = "updated_at", nullable = false)
 	private LocalDateTime updatedAt;
 
@@ -82,9 +99,11 @@ public class TeamSettings {
 		return new TeamSettings(team);
 	}
 
-	public TeamSettings nextVersion(LocalDate targetFrom, LocalDate targetTo,
-	                                LocalDate onboardingStartDate, Integer targetCount) {
+	public TeamSettings nextVersion(TeamTaskType taskType, LocalDate targetFrom, LocalDate targetTo,
+	                                LocalDate onboardingStartDate, Integer targetCount, User createdBy) {
 		TeamSettings next = createDefault(team);
+		next.taskType = taskType;
+		next.createdBy = createdBy;
 		next.version = Math.incrementExact(version);
 		next.minDailyConversations = minDailyConversations;
 		next.hourlyLaborCost = hourlyLaborCost;

@@ -11,6 +11,7 @@ import jakarta.persistence.EntityManager;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.List;
 import org.springframework.boot.test.context.TestComponent;
 import org.springframework.http.HttpHeaders;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -46,7 +47,8 @@ public class DashboardFixture {
     }
 
     public TeamTaskType taskType(Team team, String name, String successDefinition) {
-        return persist(TeamTaskType.builder().team(team).name(name).successDefinition(successDefinition).build());
+        return persist(TeamTaskType.builder().team(team).name(name).successConditions(List.of(successDefinition))
+                .failureConditions(List.of()).unknownConditions(List.of()).build());
     }
 
     public Upload upload(Team team, User uploader) {
