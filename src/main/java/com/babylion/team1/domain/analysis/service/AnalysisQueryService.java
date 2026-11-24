@@ -4,6 +4,12 @@ import com.babylion.team1.domain.analysis.dto.AnalysisStatusResponse;
 import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse;
 import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse.AiAssessment;
 import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse.Item;
+import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse.OutcomeAssessment;
+import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse.ReworkAssessment;
+import com.babylion.team1.domain.analysis.dto.ReworkAssessmentResponse;
+import com.babylion.team1.domain.analysis.repository.ReworkAssessmentRepository;
+import com.babylion.team1.domain.analysis.dto.OutcomeAssessmentResponse;
+import com.babylion.team1.domain.analysis.repository.OutcomeAssessmentRepository;
 import com.babylion.team1.domain.analysis.entity.AnalysisItem;
 import com.babylion.team1.domain.analysis.repository.AnalysisItemRepository;
 import com.babylion.team1.domain.feedback.repository.FeedbackEvidenceRepository;
@@ -31,6 +37,8 @@ public class AnalysisQueryService {
     private final AnalysisRepository analyses;
     private final AnalysisItemRepository items;
     private final FeedbackEvidenceRepository evidence;
+    private final OutcomeAssessmentRepository outcomes;
+    private final ReworkAssessmentRepository reworks;
 
     public AnalysisStatusResponse getStatus(Long analysisId, Long userId) {
         Analysis analysis = requireOwnedAnalysis(analysisId, userId);
@@ -60,11 +68,24 @@ public class AnalysisQueryService {
             feedbackByConversation.computeIfAbsent(row.getConversationId(), ignored -> new ArrayList<>())
                     .add(row.getFeedbackId());
         }
+        var itemIds = results.stream().map(AnalysisItem::getId).toList();
+        var outcomesByItem = new HashMap<Long, OutcomeAssessment>();
+        for (var assessment : outcomes.findLatestByItemIds(itemIds)) {
+            var outcome = OutcomeAssessmentResponse.from(assessment);
+            outcomesByItem.put(outcome.itemId(), new OutcomeAssessment(outcome.version(), outcome.outcome().name(),
+                    outcome.source(), outcome.assessedAt()));
+        }
+        var reworksByItem = new HashMap<Long, ReworkAssessment>();
+        for (var assessment : reworks.findLatestByItemIds(itemIds)) {
+            var rework = ReworkAssessmentResponse.from(assessment);
+            reworksByItem.put(rework.itemId(), new ReworkAssessment(rework.version(), rework.type().name(),
+                    rework.source(), rework.assessedAt()));
+        }
         var response = results.stream().map(item -> {
             Long conversationId = item.getVersion().getConversation().getId();
             return new Item(item.getId(), conversationId, item.getVersion().getId(), item.getStatus().name(),
                     name(item.getScopeClassification()), item.getFailureCode(),
-                    feedbackByConversation.getOrDefault(conversationId, List.of()), assessment(item), null, null);
+                    feedbackByConversation.getOrDefault(conversationId, List.of()), assessment(item), outcomesByItem.get(item.getId()), reworksByItem.get(item.getId()));
         }).toList();
         return new AnalysisItemsResponse(response, page, size, results.getTotalElements());
     }
