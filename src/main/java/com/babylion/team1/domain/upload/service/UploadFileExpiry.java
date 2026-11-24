@@ -2,6 +2,7 @@ package com.babylion.team1.domain.upload.service;
 
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.upload.entity.UploadStatus;
+import com.babylion.team1.domain.upload.repository.UploadCandidateRepository;
 import com.babylion.team1.domain.upload.repository.UploadRepository;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -29,12 +30,33 @@ class UploadFileExpiry {
     private final UploadFileStorage storage;
     private final UploadRepository uploadRepository;
     private final TransactionTemplate transaction;
+    private final UploadCandidateRepository candidates;
 
     UploadFileExpiry(UploadFileStorage storage, UploadRepository uploadRepository,
-                     PlatformTransactionManager transactionManager) {
+                     PlatformTransactionManager transactionManager, UploadCandidateRepository candidates) {
         this.storage = storage;
+        this.candidates = candidates;
         this.uploadRepository = uploadRepository;
         this.transaction = new TransactionTemplate(transactionManager);
+    }
+
+    @Scheduled(fixedDelay = 60_000)
+    void cleanConsumedOriginals() {
+        transaction.executeWithoutResult(status -> uploadRepository
+                .findTop100ByStatusAndOriginalCleanedFalseOrderByConsumedAtAsc(UploadStatus.CONSUMED)
+                .forEach(upload -> {
+                    storage.deleteUpload(upload.getId());
+                    if (Files.notExists(storage.pathFor(upload.getId()))) {
+                        candidates.deleteByUploadId(upload.getId());
+                        upload.markOriginalCleaned();
+                    }
+                }));
+    }
+
+    @Scheduled(fixedDelay = 60_000)
+    void expireCandidates() {
+        LocalDateTime cutoff = LocalDateTime.now().minusHours(1);
+        transaction.executeWithoutResult(status -> candidates.deleteExpired(cutoff));
     }
 
     @Scheduled(fixedDelay = 60_000)

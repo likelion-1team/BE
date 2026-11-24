@@ -240,9 +240,9 @@ public class TeamService {
         TeamSettings settings = teamSettingsRepository.findByTeamId(teamId)
                 .orElseGet(() -> TeamSettings.createDefault(team));
         Integer targetCount = request.targetCount() == null ? null : request.targetCount().intValueExact();
-        settings.updateTarget(targetFrom, targetTo, onboardingStartDate, targetCount);
-        teamSettingsRepository.save(settings);
-        return new TeamSettingsUpdateResponse(settings.updatedAtInKst());
+        TeamSettings next = settings.nextVersion(targetFrom, targetTo, onboardingStartDate, targetCount);
+        teamSettingsRepository.save(next);
+        return new TeamSettingsUpdateResponse(next.updatedAtInKst());
     }
 
     private void activateTaskType(Team team, TeamSettingsUpdateRequest.TaskType request) {

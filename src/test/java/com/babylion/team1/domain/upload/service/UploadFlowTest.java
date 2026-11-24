@@ -19,6 +19,8 @@ import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
 import com.babylion.team1.domain.upload.controller.UploadController;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.upload.entity.UploadStatus;
+import com.babylion.team1.domain.upload.entity.UploadCandidate;
+import com.babylion.team1.domain.upload.repository.UploadCandidateRepository;
 import com.babylion.team1.domain.upload.repository.UploadRepository;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.global.exception.GlobalExceptionHandler;
@@ -75,6 +77,7 @@ class UploadFlowTest {
     private final TeamSettingsRepository settingsRepository = mock(TeamSettingsRepository.class);
     private final ConversationRepository conversations = mock(ConversationRepository.class);
     private final UploadRepository uploads = mock(UploadRepository.class);
+    private final UploadCandidateRepository candidates = mock(UploadCandidateRepository.class);
     private final Team team = mock(Team.class);
     private final User user = mock(User.class);
     private TeamSettings settings;
@@ -96,6 +99,7 @@ class UploadFlowTest {
 
         storage = new UploadFileStorage(directory.toString());
         UploadService service = new UploadService(members, settingsRepository, conversations, uploads,
+                candidates,
                 new ChatGptExportReader(DataSize.ofBytes(512)), storage);
         mvc = MockMvcBuilders.standaloneSetup(new UploadController(service, mock(UploadHistoryService.class)))
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -135,11 +139,31 @@ class UploadFlowTest {
         ArgumentCaptor<Upload> captured = ArgumentCaptor.forClass(Upload.class);
         verify(uploads).saveAndFlush(captured.capture());
         assertThat(captured.getValue().getTeam()).isSameAs(team);
+        assertThat(captured.getValue().getSettings()).isSameAs(settings);
         assertThat(captured.getValue().getUploader()).isSameAs(user);
         assertThat(captured.getValue().getStatus()).isEqualTo(UploadStatus.UPLOADED);
         assertThat(captured.getValue().getConversationCount()).isEqualTo(2);
         assertThat(captured.getValue().getDuplicateCount()).isEqualTo(1);
         assertThat(Files.readString(storage.pathFor(UPLOAD_ID))).isEqualTo(json);
+    }
+
+    @Test
+    void storesSelectionIdAndHashForAnEligibleConversation() throws Exception {
+        String json = """
+                [{"id":"valid","create_time":%d,"current_node":"n",
+                  "mapping":{"n":{"message":{"author":{"role":"user"},"content":{"parts":["hello"]}}}}}]
+                """.formatted(Instant.parse(IN_PERIOD).getEpochSecond());
+        upload("conversations.json", bytes(json)).andExpect(status().isCreated());
+
+        verify(candidates).saveAll(org.mockito.ArgumentMatchers.argThat(saved -> {
+            UploadCandidate candidate = saved.iterator().next();
+            assertThat(candidate.getUpload().getId()).isEqualTo(UPLOAD_ID);
+            assertThat(candidate.getExternalId()).isEqualTo("valid");
+            assertThat(candidate.getSelectionId()).isNotBlank();
+            assertThat(candidate.getContentHash()).matches("[0-9a-f]{64}");
+            assertThat(candidate.isSelectable()).isTrue();
+            return true;
+        }));
     }
 
     @Test
@@ -238,7 +262,7 @@ class UploadFlowTest {
         PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
         when(manager.getTransaction(any())).thenAnswer(invocation -> new SimpleTransactionStatus());
 
-        new UploadFileExpiry(storage, uploads, manager).expireUnsubmittedFiles();
+        new UploadFileExpiry(storage, uploads, manager, candidates).expireUnsubmittedFiles();
 
         assertThat(storage.pathFor(10L)).doesNotExist();
         assertThat(storage.pathFor(11L)).exists();

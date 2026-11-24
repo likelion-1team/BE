@@ -27,7 +27,10 @@ public class ConversationService {
             throw new CustomException(ErrorCode.NOT_CONVERSATION_OWNER);
         }
 
-        var messages = messageRepository.findByConversationIdOrderByIdxAsc(conversationId);
+        var currentVersion = conversation.getCurrentVersion();
+        var messages = currentVersion == null
+                ? messageRepository.findLegacyMessagesOrdered(conversationId)
+                : messageRepository.findByVersionIdOrderByIdxAsc(currentVersion.getId());
         List<Integer> highlightIndexes = highlightFeedbackId == null ? List.of()
                 : evidenceRepository.findByFeedbackIdAndConversationIdAndFeedbackUserId(
                         highlightFeedbackId, conversationId, userId).stream()

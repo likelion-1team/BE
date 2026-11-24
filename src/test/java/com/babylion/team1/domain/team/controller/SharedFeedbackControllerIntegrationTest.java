@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.babylion.team1.domain.conversation.entity.Conversation;
+import com.babylion.team1.domain.conversation.entity.ConversationVersion;
 import com.babylion.team1.domain.conversation.entity.Message;
 import com.babylion.team1.domain.conversation.entity.MessageRole;
 import com.babylion.team1.domain.feedback.entity.Feedback;
@@ -28,6 +29,7 @@ import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -150,6 +152,45 @@ class SharedFeedbackControllerIntegrationTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("CONVERSATION_NOT_FOUND"));
         mockMvc.perform(get(path, conversationId)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void conversationDetailSwitchesVersionsWithoutMixingMessages() throws Exception {
+        String path = "/api/v1/conversations/{conversationId}";
+        TeamFixture fixture = saveTeam();
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "버전 테스트", null);
+        Long conversationId = addPrivateEvidence(feedback);
+        Conversation conversation = entityManager.find(Conversation.class, conversationId);
+        var first = saveConversationVersion(conversation, 1, "첫 번째 원문");
+        var second = saveConversationVersion(conversation, 2, "재업로드 원문");
+        conversation.promote(first);
+        entityManager.flush();
+        entityManager.clear();
+
+        request(path, conversationId, fixture.member())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.messages.length()").value(1))
+                .andExpect(jsonPath("$.data.messages[0].content").value("첫 번째 원문"));
+
+        entityManager.find(Conversation.class, conversationId)
+                .promote(entityManager.find(ConversationVersion.class, second.getId()));
+        entityManager.flush();
+        entityManager.clear();
+
+        request(path, conversationId, fixture.member())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.messages.length()").value(1))
+                .andExpect(jsonPath("$.data.messages[0].content").value("재업로드 원문"));
+    }
+
+    private ConversationVersion saveConversationVersion(Conversation conversation, int version, String content) {
+        var saved = ConversationVersion.builder().conversation(conversation).sourceUpload(conversation.getUpload())
+                .inputVersion(version).contentHash(Integer.toString(version).repeat(64))
+                .startedAt(Instant.parse("2026-11-20T03:00:00Z")).conversationDate(DATE).turnCount(1).build();
+        entityManager.persist(saved);
+        entityManager.persist(Message.builder().conversation(conversation).version(saved).role(MessageRole.USER)
+                .idx(0).content(content).build());
+        return saved;
     }
 
     @Test

@@ -318,7 +318,7 @@ class TeamSettingsControllerIntegrationTest {
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    void concurrentFirstUpdatesLeaveOneSettingsRowAndOneMatchingActiveType() throws Exception {
+    void concurrentFirstUpdatesLeaveOneCurrentVersionAndOneMatchingActiveType() throws Exception {
         TeamFixture fixture = transactions.execute(ignored -> saveTeam(false));
         Long teamId = fixture.team().getId();
         ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -337,6 +337,10 @@ class TeamSettingsControllerIntegrationTest {
             List<TeamTaskType> active = taskTypeRepository.findByTeamIdAndIsActiveTrueOrderById(teamId);
             assertThat(active).hasSize(1);
             TeamSettings settings = settingsRepository.findByTeamId(teamId).orElseThrow();
+            assertThat(settings.getVersion()).isEqualTo(2);
+            assertThat(jdbc.queryForList(
+                    "select version from team_settings where team_id = ? order by version", Integer.class, teamId))
+                    .containsExactly(1, 2);
             int expectedCount = active.get(0).getName().equals("보고서") ? 100 : 200;
             assertThat(settings.getTargetCount()).isEqualTo(expectedCount);
         } finally {
