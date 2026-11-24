@@ -4,6 +4,7 @@ import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.upload.entity.UploadStatus;
 import com.babylion.team1.domain.upload.repository.UploadCandidateRepository;
 import com.babylion.team1.domain.upload.repository.UploadRepository;
+import com.babylion.team1.global.policy.ServerPolicy;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -55,7 +56,7 @@ class UploadFileExpiry {
 
     @Scheduled(fixedDelay = 60_000)
     void expireCandidates() {
-        LocalDateTime cutoff = LocalDateTime.now().minusHours(1);
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(ServerPolicy.UPLOAD_RETENTION_MINUTES);
         transaction.executeWithoutResult(status -> candidates.deleteExpired(cutoff));
     }
 
