@@ -86,12 +86,15 @@ public class TeamService {
 
     @Transactional
     public TeamMemberAddResponse addMember(Long teamId, Long requesterId, TeamMemberAddRequest request) {
-        Team team = findTeam(teamId);
-        requireTeamLeader(teamId, requesterId);
+        TeamMember requester = teamMemberRepository.findByTeamIdAndUserId(teamId, requesterId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        if (!requester.isLeader()) {
+            throw new CustomException(ErrorCode.ROLE_FORBIDDEN);
+        }
 
         User user = userRepository.findByEmail(request.email())
                 .orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND, "가입되지 않은 이메일입니다."));
-        TeamMember membership = TeamMember.member(team, user);
+        TeamMember membership = TeamMember.member(requester.getTeam(), user);
         try {
             teamMemberRepository.saveAndFlush(membership);
         } catch (DataIntegrityViolationException exception) {
@@ -101,7 +104,7 @@ public class TeamService {
             throw exception;
         }
 
-        return new TeamMemberAddResponse(user.getId(), user.getName(), membership.getRole());
+        return new TeamMemberAddResponse(user.getId(), user.getName(), user.getEmail(), membership.getRole());
     }
 
     @Transactional(readOnly = true)
