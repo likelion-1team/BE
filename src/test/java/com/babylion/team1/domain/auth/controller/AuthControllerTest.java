@@ -369,6 +369,21 @@ class AuthControllerTest {
                 .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ALLOWED_ORIGIN));
     }
 
+    @Test
+    @DisplayName("분석 시작 API의 사전 요청(preflight)은 Idempotency-Key 헤더를 허용한다")
+    void preflightAllowsIdempotencyKey() throws Exception {
+        // 일부 헤더만 허용돼도 200이 나오므로, 상태가 아니라 허용된 헤더 목록을 확인해야 한다.
+        mockMvc.perform(options("/api/v1/uploads/{uploadId}/analyses", 1L)
+                        .header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN)
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS,
+                                "authorization,content-type,idempotency-key"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ALLOWED_ORIGIN))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS,
+                        "authorization, content-type, idempotency-key"));
+    }
+
     // ---------- 토큰 재발급 ----------
 
     @Test
