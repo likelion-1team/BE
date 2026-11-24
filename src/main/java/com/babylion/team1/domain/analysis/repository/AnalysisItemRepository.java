@@ -7,6 +7,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 public interface AnalysisItemRepository extends JpaRepository<AnalysisItem, Long> {
+    java.util.Optional<AnalysisItem> findByIdAndUserIdAndVersionDeletedAtIsNull(Long id, Long userId);
+
     @EntityGraph(attributePaths = {"version", "version.conversation"})
     Page<AnalysisItem> findByAnalysisIdAndUserIdAndVersionDeletedAtIsNullOrderByIdAsc(
             Long analysisId, Long userId, Pageable pageable);
