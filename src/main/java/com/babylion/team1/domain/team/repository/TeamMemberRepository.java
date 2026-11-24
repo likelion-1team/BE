@@ -41,7 +41,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 			) then true else false end)
 		from TeamMember membership
 		join membership.user rosterUser
-		left join TeamSettings settings on settings.team = membership.team
+		left join TeamSettings settings on settings.team = membership.team and settings.current = true
 		where membership.team.id = :teamId
 		order by membership.joinedAt, membership.id
 		""")
@@ -54,7 +54,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 			count(completedUpload.status),
 			settings.targetCount)
 		from TeamMember membership
-		left join TeamSettings settings on settings.team = membership.team
+		left join TeamSettings settings on settings.team = membership.team and settings.current = true
 		left join Conversation c on c.team = membership.team
 			and c.user = membership.user
 			and c.conversationDate between settings.targetFrom and settings.targetTo
