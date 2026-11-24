@@ -12,5 +12,7 @@ public interface AnalysisRepository extends JpaRepository<Analysis, Long> {
     @org.springframework.data.jpa.repository.Query("select a from Analysis a where a.id = :id")
     Optional<Analysis> lockById(Long id);
 
+    Optional<Analysis> findByIdAndUserId(Long id, Long userId);
+
     Optional<Analysis> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);
 }
