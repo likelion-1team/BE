@@ -2,6 +2,7 @@ package com.babylion.team1.domain.upload.service;
 
 import com.babylion.team1.domain.analysis.entity.Analysis;
 import com.babylion.team1.domain.analysis.entity.AnalysisItem;
+import com.babylion.team1.domain.analysis.entity.AnalysisItemStatus;
 import com.babylion.team1.domain.analysis.entity.AnalysisStatus;
 import com.babylion.team1.domain.analysis.repository.AnalysisItemRepository;
 import com.babylion.team1.domain.analysis.repository.AnalysisRepository;
@@ -187,8 +188,15 @@ public class AnalysisStartService {
                         .user(upload.getUploader()).taskType(taskType).externalId(candidate.getExternalId())
                         .title(candidate.getTitle()).startedAt(candidate.getStartedAt()).conversationDate(date)
                         .turnCount(0).estimatedTokens(0).isSuccess(false).build()));
-        if (versions.existsByConversationIdAndContentHash(conversation.getId(), candidate.getContentHash())) {
-            throw new CustomException(ErrorCode.DUPLICATE_CONTENT);
+        var existing = versions.findByConversationIdAndContentHash(conversation.getId(), candidate.getContentHash());
+        if (existing.isPresent()) {
+            var version = existing.get();
+            if (version.getDeletedAt() != null
+                    || !items.existsByVersionIdAndStatus(version.getId(), AnalysisItemStatus.FAILED)
+                    || items.existsByVersionIdAndStatusNot(version.getId(), AnalysisItemStatus.FAILED)) {
+                throw new CustomException(ErrorCode.DUPLICATE_CONTENT);
+            }
+            return version;
         }
         int inputVersion = versions.findFirstByConversationIdOrderByInputVersionDesc(conversation.getId())
                 .map(ConversationVersion::getInputVersion).orElse(0) + 1;

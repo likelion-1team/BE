@@ -20,4 +20,9 @@ public interface AnalysisItemRepository extends JpaRepository<AnalysisItem, Long
             com.babylion.team1.domain.analysis.entity.AnalysisItemStatus status, java.time.Instant cutoff);
 
     java.util.List<AnalysisItem> findByVersionIdAndCurrentTrue(Long versionId);
+    boolean existsByVersionIdAndStatus(Long versionId,
+            com.babylion.team1.domain.analysis.entity.AnalysisItemStatus status);
+
+    boolean existsByVersionIdAndStatusNot(Long versionId,
+            com.babylion.team1.domain.analysis.entity.AnalysisItemStatus status);
 }
