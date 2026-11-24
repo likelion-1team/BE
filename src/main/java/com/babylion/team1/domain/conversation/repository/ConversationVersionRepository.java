@@ -6,5 +6,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface ConversationVersionRepository extends JpaRepository<ConversationVersion, Long> {
     Optional<ConversationVersion> findFirstByConversationIdOrderByInputVersionDesc(Long conversationId);
-    boolean existsByConversationIdAndContentHash(Long conversationId, String contentHash);
+    Optional<ConversationVersion> findByConversationIdAndContentHash(Long conversationId, String contentHash);
 }

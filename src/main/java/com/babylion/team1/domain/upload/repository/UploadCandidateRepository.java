@@ -25,6 +25,11 @@ public interface UploadCandidateRepository extends JpaRepository<UploadCandidate
             where c.id in :candidateIds and v.conversation.team.id = c.upload.team.id
                 and v.conversation.user.id = c.upload.uploader.id
                 and v.conversation.externalId = c.externalId and v.contentHash = c.contentHash
+                and (v.deletedAt is not null or not exists (
+                    select 1 from AnalysisItem i where i.version.id = v.id and i.status = FAILED
+                ) or exists (
+                    select 1 from AnalysisItem i where i.version.id = v.id and i.status <> FAILED
+                ))
             """)
     java.util.Set<Long> findReservedCandidateIds(Collection<Long> candidateIds);
 
