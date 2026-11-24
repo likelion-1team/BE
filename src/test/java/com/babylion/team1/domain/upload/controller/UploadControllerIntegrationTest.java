@@ -224,8 +224,9 @@ class UploadControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
     }
 
-    @Test
-    void acceptsVersionedSelectionAndReplaysTheSameAnalysis() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void acceptsVersionedSelectionAndRunsWorkerAfterCommit(boolean commit) throws Exception {
         User uploader = User.builder().name("분석 테스트").email("analysis-it-" + UUID.randomUUID() + "@test.com")
                 .passwordHash("test-password-hash").build();
         entityManager.persist(uploader);
@@ -267,22 +268,48 @@ class UploadControllerIntegrationTest {
         var request = post("/api/v1/uploads/{uploadId}/analyses", uploadId)
                 .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
                 .header("Idempotency-Key", key);
-        mockMvc.perform(request.content(body.replace(":0,", ":1,")))
-                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+        if (!commit) {
+            mockMvc.perform(request.content(body.replace(":0,", ":1,")))
+                    .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+        }
         mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.status").value("QUEUED")).andExpect(jsonPath("$.data.selectedCount").value(1));
         entityManager.flush();
         Long analysisId = jdbc.queryForObject("select id from analyses where upload_id = ?", Long.class, uploadId);
         mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.analysisId").value(analysisId));
-        mockMvc.perform(request.content(body.replace(":0,", ":1,")))
-                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"));
+        if (!commit) {
+            mockMvc.perform(request.content(body.replace(":0,", ":1,")))
+                    .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"));
+        }
         assertThat(jdbc.queryForObject("select status from uploads where id = ?", String.class, uploadId))
                 .isEqualTo("CONSUMED");
         assertThat(jdbc.queryForList("""
                 select m.content from messages m join analysis_items i on i.version_id = m.version_id
                 where i.analysis_id = ? order by m.idx
                 """, String.class, analysisId)).containsExactly("hello", "world");
+        if (commit) {
+            TestTransaction.flagForCommit();
+            TestTransaction.end();
+            long deadline = System.nanoTime() + java.time.Duration.ofSeconds(15).toNanos();
+            String state;
+            do {
+                state = jdbc.queryForObject("select status from analyses where id = ?", String.class, analysisId);
+                if ("SUCCEEDED".equals(state) || "FAILED".equals(state)) {
+                    break;
+                }
+                Thread.sleep(50);
+            } while (System.nanoTime() < deadline);
+
+            assertThat(state).isEqualTo("SUCCEEDED");
+            assertThat(jdbc.queryForObject(
+                    "select status from analysis_items where analysis_id = ?", String.class, analysisId))
+                    .isEqualTo("SUCCEEDED");
+            assertThat(jdbc.queryForObject(
+                    "select succeeded_count from analyses where id = ?", Integer.class, analysisId)).isEqualTo(1);
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from feedbacks where upload_id = ?", Long.class, uploadId)).isPositive();
+        }
     }
 
     @ParameterizedTest

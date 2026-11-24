@@ -91,6 +91,27 @@ public class Analysis {
     @Column(name = "finished_at", columnDefinition = "DATETIME(6)")
     private Instant finishedAt;
 
+    public void begin() {
+        if (status == AnalysisStatus.QUEUED) {
+            status = AnalysisStatus.RUNNING;
+            startedAt = Instant.now();
+        }
+    }
+
+    public void recordResult(boolean success) {
+        completedCount++;
+        if (success) {
+            succeededCount++;
+        } else {
+            failedCount++;
+        }
+        if (completedCount == selectedCount) {
+            status = failedCount == 0 ? AnalysisStatus.SUCCEEDED
+                    : succeededCount == 0 ? AnalysisStatus.FAILED : AnalysisStatus.PARTIALLY_SUCCEEDED;
+            finishedAt = Instant.now();
+        }
+    }
+
     public void releaseExpiredKey() {
         idempotencyKey = "expired:" + id;
     }

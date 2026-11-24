@@ -122,4 +122,32 @@ public class AnalysisItem {
 
     @Column(name = "finished_at", columnDefinition = "DATETIME(6)")
     private Instant finishedAt;
+
+    public void begin() {
+        status = AnalysisItemStatus.RUNNING;
+        attemptCount++;
+    }
+
+    public void succeed(int tokens, String model, boolean current) {
+        status = AnalysisItemStatus.SUCCEEDED;
+        estimatedTokens = tokens;
+        modelVersion = model;
+        this.current = current;
+        finishedAt = Instant.now();
+    }
+
+    public boolean recordFailedAttempt() {
+        attemptCount++;
+        if (attemptCount < 3) {
+            return false;
+        }
+        status = AnalysisItemStatus.FAILED;
+        failureCode = "ANALYSIS_FAILED";
+        finishedAt = Instant.now();
+        return true;
+    }
+
+    public void retire() {
+        current = false;
+    }
 }

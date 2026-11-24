@@ -156,7 +156,9 @@ public class AnalysisStartService {
         for (int index = 0; index < turns.size(); index++) {
             var turn = turns.get(index);
             rows.add(Message.builder().conversation(conversation).version(version).idx(index)
-                    .role(turn.role()).content(turn.content()).createdAt(turn.createdAt()).build());
+                    .role(turn.role()).content(turn.content()).createdAt(turn.createdAt())
+                    .sourceModel(turn.model() == null ? null : turn.model().substring(0, Math.min(50, turn.model().length())))
+                    .branchPoint(turn.branchPoint()).build());
         }
         messages.saveAll(rows);
         return version;

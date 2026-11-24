@@ -64,4 +64,8 @@ public class ConversationVersion {
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false, columnDefinition = "DATETIME(6)")
     private Instant createdAt;
+
+    public void recordEstimatedTokens(int tokens) {
+        estimatedTokens = tokens;
+    }
 }

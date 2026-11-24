@@ -5,6 +5,8 @@ import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface MessageRepository extends JpaRepository<Message, Long> {
+    List<Message> findByVersionIdOrderByIdxAsc(Long versionId);
+
     @org.springframework.data.jpa.repository.Query("select m from Message m where m.conversation.id = :conversationId and m.version is null")
     List<Message> findByConversationId(Long conversationId);
 

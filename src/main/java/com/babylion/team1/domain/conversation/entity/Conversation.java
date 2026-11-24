@@ -126,6 +126,10 @@ public class Conversation {
 		}
 	}
 
+	public void promote(ConversationVersion version) {
+		currentVersion = version;
+	}
+
 	public void recordAnalysis(String model, int turnCount, int estimatedTokens, BigDecimal estimatedCost,
 		boolean success, boolean rework, int reviewTimeSec, int reworkTimeSec) {
 		this.model = model;

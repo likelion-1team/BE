@@ -53,9 +53,16 @@ public class Message {
 	@Column(name = "created_at")
 	private LocalDateTime createdAt;
 
+	@Column(name = "source_model", length = 50)
+	private String sourceModel;
+
+	@ColumnDefault("false")
+	@Column(name = "branch_point", nullable = false)
+	private boolean branchPoint;
+
 	@Builder
 	private Message(Conversation conversation, ConversationVersion version, Integer idx, MessageRole role, String content, Boolean isRework,
-		LocalDateTime createdAt) {
+		LocalDateTime createdAt, String sourceModel, boolean branchPoint) {
 		this.conversation = conversation;
 		this.version = version;
 		this.idx = idx;
@@ -65,6 +72,8 @@ public class Message {
 			this.isRework = isRework;
 		}
 		this.createdAt = createdAt;
+		this.sourceModel = sourceModel;
+		this.branchPoint = branchPoint;
 	}
 	public void markRework(boolean rework) {
 		this.isRework = rework;
