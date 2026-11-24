@@ -261,8 +261,21 @@ class UploadControllerIntegrationTest {
                 .andExpect(status().isCreated());
         entityManager.flush();
         Long uploadId = jdbc.queryForObject("select id from uploads where team_id = ?", Long.class, teamId);
-        String selectionId = jdbc.queryForObject(
-                "select selection_id from upload_candidates where upload_id = ?", String.class, uploadId);
+        String candidatePath = "/api/v1/uploads/{uploadId}/conversations";
+        String response = mockMvc.perform(get(candidatePath, uploadId).header(HttpHeaders.AUTHORIZATION, bearer)
+                        .param("q", "테스트").param("size", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].externalId").value(externalId))
+                .andExpect(jsonPath("$.data.items[0].selectable").value(true))
+                .andExpect(jsonPath("$.data.items[0].duplicateType").value("NONE"))
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andReturn().getResponse().getContentAsString();
+        String selectionId = com.jayway.jsonpath.JsonPath.read(response, "$.data.items[0].selectionId");
+        mockMvc.perform(get(candidatePath, uploadId).header(HttpHeaders.AUTHORIZATION, bearer).param("page", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(1));
         String key = UUID.randomUUID().toString();
         String body = """
                 {"settingsVersion":0,"selections":[{"selectionId":"%s","taskTypeId":%d}]}
@@ -295,6 +308,10 @@ class UploadControllerIntegrationTest {
             var otherUser = User.builder().name("다른 사용자").email("other-" + UUID.randomUUID() + "@test.com")
                     .passwordHash("test-password-hash").build();
             entityManager.persist(otherUser);
+            mockMvc.perform(get(candidatePath, uploadId).header(HttpHeaders.AUTHORIZATION,
+                            "Bearer " + accessTokens.create(otherUser.getId())))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
             mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION,
                             "Bearer " + accessTokens.create(otherUser.getId())))
                     .andExpect(status().isNotFound())
