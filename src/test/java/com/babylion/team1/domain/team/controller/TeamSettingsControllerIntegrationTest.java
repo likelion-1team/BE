@@ -23,6 +23,7 @@ import com.babylion.team1.support.TestAccessTokens;
 import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -107,17 +108,63 @@ class TeamSettingsControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.message").value("조회 성공"))
-                .andExpect(jsonPath("$.data.taskTypes.length()").value(0))
+                .andExpect(jsonPath("$.data.length()").value(8))
+                .andExpect(jsonPath("$.data.version").value(0))
+                .andExpect(jsonPath("$.data.taskType").value(nullValue()))
                 .andExpect(jsonPath("$.data.targetFrom").value(nullValue()))
                 .andExpect(jsonPath("$.data.targetTo").value(nullValue()))
                 .andExpect(jsonPath("$.data.onboardingStartDate").value(nullValue()))
                 .andExpect(jsonPath("$.data.targetCount").value(nullValue()))
-                .andExpect(jsonPath("$.data.minDailyConversations").value(3))
-                .andExpect(jsonPath("$.data.hourlyLaborCost").value(30000));
+                .andExpect(jsonPath("$.data.updatedAt", endsWith("+09:00")))
+                .andExpect(jsonPath("$.data.policies.length()").value(6))
+                .andExpect(jsonPath("$.data.policies.policyVersion").value(1))
+                .andExpect(jsonPath("$.data.policies.minSampleSize").value(20))
+                .andExpect(jsonPath("$.data.policies.minTeamContributors").value(5))
+                .andExpect(jsonPath("$.data.policies.minOutcomeConfirmationRate").value(0.8))
+                .andExpect(jsonPath("$.data.policies.uploadRetentionMinutes").value(60))
+                .andExpect(jsonPath("$.data.policies.maxSelectionsPerRequest").value(100));
 
         update(fixture.team().getId(), member, validRequest("보고서", "검토 통과", 120))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+    }
+
+    @Test
+    void readsUnsetSettingsWhenTeamHasNoSettingsRow() throws Exception {
+        TeamFixture fixture = saveTeam(false);
+
+        read(fixture.team().getId(), fixture.leader())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(8))
+                .andExpect(jsonPath("$.data.version").value(0))
+                .andExpect(jsonPath("$.data.taskType").value(nullValue()))
+                .andExpect(jsonPath("$.data.updatedAt").value(nullValue()))
+                .andExpect(jsonPath("$.data.policies.policyVersion").value(1));
+    }
+
+    @Test
+    void initialVersionScriptMovesOnlyConfiguredV3SettingsToVersionOne() throws Exception {
+        TeamFixture configured = saveV3Team(true, true);
+        TeamFixture withoutPeriod = saveV3Team(false, true);
+        TeamFixture withoutTaskType = saveV3Team(true, false);
+        TeamFixture versioned = saveTeam(true);
+        update(versioned.team().getId(), versioned.leader(), validRequest("보고서", "검토 통과", 120))
+                .andExpect(status().isOk());
+        entityManager.flush();
+
+        String script = Files.readString(Path.of("scripts/migrate-team-settings-initial-version.sql"));
+        jdbc.execute(script.strip().replaceAll(";$", ""));
+        entityManager.clear();
+
+        read(configured.team().getId(), configured.leader())
+                .andExpect(jsonPath("$.data.version").value(1))
+                .andExpect(jsonPath("$.data.taskType.name").value("보고서"))
+                .andExpect(jsonPath("$.data.taskType.successConditions.length()").value(1))
+                .andExpect(jsonPath("$.data.taskType.successConditions[0]").value("검토 통과"));
+        read(withoutPeriod.team().getId(), withoutPeriod.leader()).andExpect(jsonPath("$.data.version").value(0));
+        read(withoutTaskType.team().getId(), withoutTaskType.leader()).andExpect(jsonPath("$.data.version").value(0));
+        assertThat(jdbc.queryForList("select version from team_settings where team_id = ? order by version",
+                Integer.class, versioned.team().getId())).containsExactly(0, 1);
     }
 
     @Test
@@ -126,12 +173,12 @@ class TeamSettingsControllerIntegrationTest {
         User outsider = saveTeam(true).leader();
         Map<String, Object> body = validRequest("보고서", "검토 통과", 120);
 
-        read(fixture.team().getId(), outsider).andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+        read(fixture.team().getId(), outsider).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         update(fixture.team().getId(), outsider, body).andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
         read(Long.MAX_VALUE, outsider).andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("TEAM_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         update(Long.MAX_VALUE, outsider, body).andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("TEAM_NOT_FOUND"));
     }
@@ -148,32 +195,40 @@ class TeamSettingsControllerIntegrationTest {
     }
 
     @Test
-    void leaderSavesAndReadsSettingsWhileKeepingEvaluationDefaults() throws Exception {
+    void leaderSavesAndReadsSettings() throws Exception {
         TeamFixture fixture = saveTeam(true);
         Long teamId = fixture.team().getId();
 
-        update(teamId, fixture.leader(), validRequest("보고서 작성", "검토 통과", 120))
+        String saved = update(teamId, fixture.leader(), validRequest("보고서 작성", "검토 통과", 120))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.message").value("설정 저장 성공"))
                 .andExpect(jsonPath("$.data.updatedAt", endsWith("+09:00")))
-                .andExpect(jsonPath("$.errors").value(nullValue()));
+                .andExpect(jsonPath("$.errors").value(nullValue()))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        String updatedAt = JsonPath.read(saved, "$.data.updatedAt");
 
         read(teamId, fixture.leader()).andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.taskTypes.length()").value(1))
-                .andExpect(jsonPath("$.data.taskTypes[0].id").isNumber())
-                .andExpect(jsonPath("$.data.taskTypes[0].name").value("보고서 작성"))
-                .andExpect(jsonPath("$.data.taskTypes[0].successDefinition").value("검토 통과"))
+                .andExpect(jsonPath("$.data.length()").value(8))
+                .andExpect(jsonPath("$.data.version").value(1))
+                .andExpect(jsonPath("$.data.taskType.length()").value(5))
+                .andExpect(jsonPath("$.data.taskType.taskTypeId").value(taskType("보고서 작성", teamId).getId()))
+                .andExpect(jsonPath("$.data.taskType.name").value("보고서 작성"))
+                .andExpect(jsonPath("$.data.taskType.successConditions.length()").value(1))
+                .andExpect(jsonPath("$.data.taskType.successConditions[0]").value("검토 통과"))
+                .andExpect(jsonPath("$.data.taskType.failureConditions.length()").value(0))
+                .andExpect(jsonPath("$.data.taskType.unknownConditions.length()").value(0))
                 .andExpect(jsonPath("$.data.targetFrom").value(FROM.toString()))
                 .andExpect(jsonPath("$.data.targetTo").value(TO.toString()))
                 .andExpect(jsonPath("$.data.onboardingStartDate").value(START.toString()))
                 .andExpect(jsonPath("$.data.targetCount").value(120))
-                .andExpect(jsonPath("$.data.minDailyConversations").value(3))
-                .andExpect(jsonPath("$.data.hourlyLaborCost").value(30000));
+                .andExpect(jsonPath("$.data.updatedAt").value(updatedAt));
 
         update(teamId, fixture.leader(), validRequest("보고서 작성", "검토 통과", null))
                 .andExpect(status().isOk());
-        read(teamId, fixture.leader()).andExpect(jsonPath("$.data.targetCount").value(nullValue()));
+        read(teamId, fixture.leader())
+                .andExpect(jsonPath("$.data.version").value(2))
+                .andExpect(jsonPath("$.data.targetCount").value(nullValue()));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -233,8 +288,8 @@ class TeamSettingsControllerIntegrationTest {
         assertThat(saved.getUpdatedAt()).isAfter(oldUpdate).isEqualTo(returned.toLocalDateTime());
         assertThat(returned.getOffset().getTotalSeconds()).isEqualTo(9 * 3600);
         read(teamId, fixture.leader())
-                .andExpect(jsonPath("$.data.taskTypes[0].id").value(taskId))
-                .andExpect(jsonPath("$.data.taskTypes[0].successDefinition").value("수정된 정의"));
+                .andExpect(jsonPath("$.data.taskType.taskTypeId").value(taskId))
+                .andExpect(jsonPath("$.data.taskType.successConditions[0]").value("수정된 정의"));
     }
 
     @Test
@@ -251,8 +306,7 @@ class TeamSettingsControllerIntegrationTest {
         entityManager.persist(feedback);
 
         update(teamId, fixture.leader(), validRequest("회의록", "회의 내용 공유", 120)).andExpect(status().isOk());
-        read(teamId, fixture.leader()).andExpect(jsonPath("$.data.taskTypes.length()").value(1))
-                .andExpect(jsonPath("$.data.taskTypes[0].name").value("회의록"));
+        read(teamId, fixture.leader()).andExpect(jsonPath("$.data.taskType.name").value("회의록"));
         entityManager.flush();
         entityManager.clear();
         assertThat(taskType("보고서", teamId).getIsActive()).isFalse();
@@ -261,9 +315,9 @@ class TeamSettingsControllerIntegrationTest {
         assertThat(entityManager.find(Feedback.class, feedback.getId()).getTaskType().getId()).isEqualTo(oldType.getId());
 
         update(teamId, fixture.leader(), validRequest("보고서", "다시 적용", null)).andExpect(status().isOk());
-        read(teamId, fixture.leader()).andExpect(jsonPath("$.data.taskTypes.length()").value(1))
-                .andExpect(jsonPath("$.data.taskTypes[0].id").value(oldType.getId()))
-                .andExpect(jsonPath("$.data.taskTypes[0].successDefinition").value("다시 적용"));
+        read(teamId, fixture.leader())
+                .andExpect(jsonPath("$.data.taskType.taskTypeId").value(oldType.getId()))
+                .andExpect(jsonPath("$.data.taskType.successConditions[0]").value("다시 적용"));
         assertThat(taskType("회의록", teamId).getIsActive()).isFalse();
     }
 
@@ -324,7 +378,7 @@ class TeamSettingsControllerIntegrationTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             read(teamId, fixture.leader()).andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.taskTypes.length()").value(0))
+                    .andExpect(jsonPath("$.data.taskType").value(nullValue()))
                     .andExpect(jsonPath("$.data.targetFrom").value(nullValue()));
             assertThat(settingsRepository.findByTeamId(teamId)).isEmpty();
 
@@ -393,6 +447,21 @@ class TeamSettingsControllerIntegrationTest {
             entityManager.persist(TeamSettings.createDefault(team));
         }
         return new TeamFixture(team, leader);
+    }
+
+    /** v3에서 저장해 version 0으로 남은 설정 */
+    private TeamFixture saveV3Team(boolean withPeriod, boolean withTaskType) {
+        TeamFixture fixture = saveTeam(false);
+        TeamSettings settings = TeamSettings.createDefault(fixture.team());
+        if (withPeriod) {
+            settings.updateTarget(FROM, TO, START, 120);
+        }
+        entityManager.persist(settings);
+        if (withTaskType) {
+            entityManager.persist(TeamTaskType.builder().team(fixture.team())
+                    .name("보고서").successDefinition("검토 통과").build());
+        }
+        return fixture;
     }
 
     private User saveUser() {

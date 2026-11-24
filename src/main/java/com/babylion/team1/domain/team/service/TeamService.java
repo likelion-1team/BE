@@ -214,11 +214,14 @@ public class TeamService {
 
     @Transactional(readOnly = true)
     public TeamSettingsResponse getSettings(Long teamId, Long userId) {
-        Team team = findTeam(teamId);
-        requireTeamMember(teamId, userId);
-        TeamSettings settings = teamSettingsRepository.findByTeamId(teamId)
-                .orElseGet(() -> TeamSettings.createDefault(team));
-        return TeamSettingsResponse.from(settings, teamTaskTypeRepository.findByTeamIdAndIsActiveTrueOrderById(teamId));
+        teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        TeamTaskType taskType = teamTaskTypeRepository.findByTeamIdAndIsActiveTrueOrderById(teamId).stream()
+                .findFirst()
+                .orElse(null);
+        return teamSettingsRepository.findByTeamId(teamId)
+                .map(settings -> TeamSettingsResponse.from(settings, taskType))
+                .orElseGet(TeamSettingsResponse::unset);
     }
 
     @Transactional
