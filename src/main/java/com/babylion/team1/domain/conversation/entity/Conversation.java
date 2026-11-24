@@ -35,6 +35,10 @@ public class Conversation {
 	private Long id;
 
 	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "current_version_id")
+	private ConversationVersion currentVersion;
+
+	@ManyToOne(fetch = FetchType.LAZY)
 	@JoinColumn(name = "team_id", nullable = false)
 	private Team team;
 

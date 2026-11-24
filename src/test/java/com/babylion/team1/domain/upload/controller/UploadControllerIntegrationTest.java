@@ -365,6 +365,8 @@ class UploadControllerIntegrationTest {
             jdbc.update("delete from messages where conversation_id in (select id from conversations where team_id = ?)",
                     teamId);
             jdbc.update("delete from conversations where team_id = ?", teamId);
+            jdbc.update("delete from upload_candidates where upload_id in (select id from uploads where team_id = ?)",
+                    teamId);
             jdbc.update("delete from uploads where team_id = ?", teamId);
             jdbc.update("delete from team_task_types where team_id = ?", teamId);
             jdbc.update("delete from team_settings where team_id = ?", teamId);

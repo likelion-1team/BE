@@ -1,6 +1,7 @@
 package com.babylion.team1.domain.upload.entity;
 
 import com.babylion.team1.domain.team.entity.Team;
+import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.user.entity.User;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -28,6 +29,10 @@ public class Upload {
 	@ManyToOne(fetch = FetchType.LAZY)
 	@JoinColumn(name = "team_id", nullable = false)
 	private Team team;
+
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "settings_id", updatable = false)
+	private TeamSettings settings;
 
 	/** 업로더 = 대화 주인 */
 	@ManyToOne(fetch = FetchType.LAZY)
@@ -80,8 +85,9 @@ public class Upload {
 
 	@Builder
 	private Upload(Team team, User uploader, String fileName, Integer conversationCount, Integer duplicateCount,
-	               LocalDate targetFrom, LocalDate targetTo) {
+	               LocalDate targetFrom, LocalDate targetTo, TeamSettings settings) {
 		this.team = team;
+		this.settings = settings;
 		this.uploader = uploader;
 		this.fileName = fileName;
 		this.conversationCount = conversationCount;

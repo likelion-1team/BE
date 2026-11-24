@@ -11,9 +11,12 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.ColumnDefault;
 
-/** 분석 대상 기간·온보딩 시작일·기준값 (teams와 1:1, 팀 생성 시 기본값으로 생성) */
+/** 분석 대상 기간·온보딩 시작일·기준값 (저장할 때마다 새 버전 생성) */
 @Entity
-@Table(name = "team_settings")
+@Table(name = "team_settings",
+        uniqueConstraints = @UniqueConstraint(name = "uk_team_settings_team_version",
+                columnNames = {"team_id", "version"}),
+        indexes = @Index(name = "idx_team_settings_current", columnList = "team_id, is_current"))
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class TeamSettings {
@@ -29,9 +32,17 @@ public class TeamSettings {
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
 	private Long id;
 
-	@OneToOne(fetch = FetchType.LAZY)
-	@JoinColumn(name = "team_id", nullable = false, unique = true)
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "team_id", nullable = false)
 	private Team team;
+
+	@ColumnDefault("0")
+	@Column(nullable = false, updatable = false)
+	private int version;
+
+	@ColumnDefault("true")
+	@Column(name = "is_current", nullable = false)
+	private boolean current = true;
 
 	/** 분석 대상 기간. 팀장이 설정하기 전 NULL */
 	@Column(name = "target_from")
@@ -69,6 +80,17 @@ public class TeamSettings {
 	/** 팀 생성 시 기본값으로 생성 */
 	public static TeamSettings createDefault(Team team) {
 		return new TeamSettings(team);
+	}
+
+	public TeamSettings nextVersion(LocalDate targetFrom, LocalDate targetTo,
+	                                LocalDate onboardingStartDate, Integer targetCount) {
+		TeamSettings next = createDefault(team);
+		next.version = Math.incrementExact(version);
+		next.minDailyConversations = minDailyConversations;
+		next.hourlyLaborCost = hourlyLaborCost;
+		next.updateTarget(targetFrom, targetTo, onboardingStartDate, targetCount);
+		current = false;
+		return next;
 	}
 
 	public void updateTarget(LocalDate targetFrom, LocalDate targetTo, LocalDate onboardingStartDate, Integer targetCount) {

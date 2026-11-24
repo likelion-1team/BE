@@ -8,11 +8,15 @@ import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
 import com.babylion.team1.domain.upload.dto.response.UploadResponse;
 import com.babylion.team1.domain.upload.dto.response.UploadResponse.Candidate;
 import com.babylion.team1.domain.upload.entity.Upload;
+import com.babylion.team1.domain.upload.entity.UploadCandidate;
+import com.babylion.team1.domain.upload.entity.UploadCandidate.DuplicateType;
+import com.babylion.team1.domain.upload.repository.UploadCandidateRepository;
 import com.babylion.team1.domain.upload.repository.UploadRepository;
 import com.babylion.team1.domain.upload.service.ChatGptExportReader.ExportConversation;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -34,6 +38,7 @@ public class UploadService {
     private final TeamSettingsRepository teamSettingsRepository;
     private final ConversationRepository conversationRepository;
     private final UploadRepository uploadRepository;
+    private final UploadCandidateRepository candidateRepository;
     private final ChatGptExportReader reader;
     private final UploadFileStorage storage;
 
@@ -47,7 +52,7 @@ public class UploadService {
         String fileName = validateFile(file);
         Path staged = storage.stage(file);
         try {
-            List<ExportConversation> conversations = reader.read(staged, fileName.toLowerCase(Locale.ROOT).endsWith(".zip"),
+            List<ExportConversation> conversations = reader.readCandidates(staged, fileName.toLowerCase(Locale.ROOT).endsWith(".zip"),
                     settings.getTargetFrom(), settings.getTargetTo());
             Set<String> duplicates = findDuplicates(teamId, conversations);
             List<Candidate> candidates = conversations.stream()
@@ -57,6 +62,7 @@ public class UploadService {
             Upload upload = uploadRepository.saveAndFlush(Upload.builder()
                     .team(member.getTeam())
                     .uploader(member.getUser())
+                    .settings(settings)
                     .fileName(fileName)
                     .conversationCount(candidates.size())
                     .duplicateCount(duplicates.size())
@@ -72,12 +78,41 @@ public class UploadService {
                     }
                 }
             });
+            saveCandidates(upload, teamId, userId, conversations);
             storage.store(staged, uploadId);
             storage.writeTargetPeriod(uploadId,
                     new UploadFileStorage.TargetPeriod(settings.getTargetFrom(), settings.getTargetTo()));
             return new UploadResponse(uploadId, candidates);
         } finally {
             storage.delete(staged);
+        }
+    }
+
+    private void saveCandidates(Upload upload, Long teamId, Long userId,
+                                List<ExportConversation> conversations) {
+        for (int start = 0; start < conversations.size(); start += DUPLICATE_QUERY_BATCH_SIZE) {
+            int end = Math.min(start + DUPLICATE_QUERY_BATCH_SIZE, conversations.size());
+            var batch = conversations.subList(start, end);
+            var ids = batch.stream().map(ExportConversation::externalId).toList();
+            var hashes = new HashMap<String, String>();
+            conversationRepository.findCurrentContentHashes(teamId, userId, ids)
+                    .forEach(current -> hashes.put(current.getExternalId(), current.getContentHash()));
+
+            candidateRepository.saveAll(batch.stream().map(conversation -> {
+                String previousHash = hashes.get(conversation.externalId());
+                DuplicateType duplicateType = DuplicateType.NONE;
+                if (previousHash != null) {
+                    duplicateType = previousHash.equals(conversation.contentHash())
+                            ? DuplicateType.SAME_CONTENT : DuplicateType.CONTENT_UPDATED;
+                }
+                String title = conversation.title();
+                if (title != null && title.codePointCount(0, title.length()) > 255) {
+                    title = title.substring(0, title.offsetByCodePoints(0, 255));
+                }
+                return new UploadCandidate(upload, conversation.externalId(), title,
+                        conversation.startedAt().toLocalDateTime(), conversation.contentHash(),
+                        duplicateType, conversation.validationCode());
+            }).toList());
         }
     }
 
