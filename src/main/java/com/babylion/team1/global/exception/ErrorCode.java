@@ -25,7 +25,6 @@ public enum ErrorCode {
     DUPLICATE_CONTENT(HttpStatus.CONFLICT, "DUPLICATE_CONTENT", "이미 등록된 대화 내용입니다."),
     IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", "같은 키로 다른 요청을 보낼 수 없습니다."),
     UPLOAD_CONSUMED(HttpStatus.CONFLICT, "UPLOAD_CONSUMED", "이미 분석이 확정된 업로드입니다."),
-    VERSION_CONFLICT(HttpStatus.CONFLICT, "VERSION_CONFLICT", "분석 기준 버전이 변경되었습니다."),
     UPLOAD_EXPIRED(HttpStatus.GONE, "UPLOAD_EXPIRED", "분석할 원본 파일의 보관 기간이 만료되었습니다."),
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_SERVER_ERROR", "서버 내부 오류가 발생했습니다."),
 
