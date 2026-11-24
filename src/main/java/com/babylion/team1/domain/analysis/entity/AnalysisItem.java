@@ -171,4 +171,8 @@ public class AnalysisItem {
     public void confirmOutcome(AnalysisOutcome outcome) {
         confirmedOutcome = outcome;
     }
+
+    public void confirmReworkType(AnalysisReworkType type) {
+        confirmedReworkType = type;
+    }
 }
