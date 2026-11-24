@@ -57,4 +57,7 @@ public class SharePreview {
         createdAt = now.truncatedTo(ChronoUnit.MICROS);
         expiresAt = createdAt.plus(30, ChronoUnit.MINUTES);
     }
+    public void consume(Instant now) {
+        consumedAt = now.truncatedTo(ChronoUnit.MICROS);
+    }
 }

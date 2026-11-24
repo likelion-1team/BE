@@ -39,6 +39,16 @@ public interface FeedbackEvidenceRepository extends JpaRepository<FeedbackEviden
             """)
     boolean hasDeletedOriginal(Long feedbackId);
 
+    @org.springframework.data.jpa.repository.Query("""
+            select m.content from FeedbackEvidence e, Message m
+            where e.feedback.id = :feedbackId and m.conversation.id = e.conversation.id
+                and (m.version is null or exists (
+                    select 1 from AnalysisItem item
+                    where item.analysis.upload.id = e.feedback.upload.id and item.version.id = m.version.id
+                ))
+            """)
+    List<String> findOriginalTexts(Long feedbackId);
+
     List<FeedbackEvidence> findByFeedbackIdOrderByIdAsc(Long feedbackId);
 
     List<FeedbackEvidence> findByFeedbackIdAndConversationIdAndFeedbackUserId(

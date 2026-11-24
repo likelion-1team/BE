@@ -22,14 +22,16 @@ public record SharedCasesResponse(List<Item> items) {
     ) {
 
         private static Item from(Feedback feedback) {
+            var snapshot = feedback.getSharedPreviewContent();
             return new Item(
                     feedback.getId(),
                     feedback.getTaskType().getName(),
                     FeedbackType.displayName(feedback.getType()),
-                    feedback.getTitle(),
-                    feedback.getProblem(),
-                    feedback.getImprovement(),
-                    FeedbackExample.from(feedback),
+                    snapshot == null ? feedback.getTitle() : snapshot.title(),
+                    snapshot == null ? feedback.getProblem() : snapshot.problem(),
+                    snapshot == null ? feedback.getImprovement() : snapshot.improvement(),
+                    snapshot == null ? FeedbackExample.from(feedback)
+                            : new FeedbackExample(snapshot.example().before(), snapshot.example().after()),
                     Boolean.TRUE.equals(feedback.getIsGuide()));
         }
     }

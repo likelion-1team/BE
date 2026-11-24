@@ -34,12 +34,14 @@ public record GuidesResponse(List<Group> groups) {
     ) {
 
         private static Guide from(Feedback feedback) {
+            var snapshot = feedback.getSharedPreviewContent();
             return new Guide(
                     feedback.getId(),
-                    feedback.getTitle(),
-                    feedback.getProblem(),
-                    feedback.getImprovement(),
-                    FeedbackExample.from(feedback),
+                    snapshot == null ? feedback.getTitle() : snapshot.title(),
+                    snapshot == null ? feedback.getProblem() : snapshot.problem(),
+                    snapshot == null ? feedback.getImprovement() : snapshot.improvement(),
+                    snapshot == null ? FeedbackExample.from(feedback)
+                            : new FeedbackExample(snapshot.example().before(), snapshot.example().after()),
                     feedback.guideAddedAtInKst());
         }
     }

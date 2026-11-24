@@ -75,7 +75,7 @@ class SharedFeedbackControllerIntegrationTest {
     void sharePreviewStoresOnlyPublicTemplatesAndHidesOtherOwners() throws Exception {
         TeamFixture fixture = saveTeam();
         Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT,
-                "김직원 고객사 프로젝트", "private@example.com 010-1234-5678");
+                "공유할 작업 요약", "private@example.com 010-1234-5678 형식은 표로 작성");
         Long conversationId = addPrivateEvidence(feedback);
         entityManager.flush();
         String path = "/api/v1/feedbacks/{feedbackId}/share-preview";
@@ -88,9 +88,9 @@ class SharedFeedbackControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.previewVersion").value(1))
                 .andExpect(jsonPath("$.data.redactionStatus").value("PASSED"))
                 .andExpect(jsonPath("$.data.content.type").value(MISSING_CONTEXT))
-                .andExpect(jsonPath("$.data.content.example.before").value("자료를 정리해 줘."))
+                .andExpect(jsonPath("$.data.content.example.before").value("개선 전 예시"))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-        assertThat(response).doesNotContain("김직원", "private@example.com", "010-1234-5678", "보호된 원문",
+        assertThat(response).contains("형식은 표로 작성").doesNotContain( "private@example.com", "010-1234-5678", "보호된 원문",
                 "feedbackId", "conversationId");
         assertThat(jdbc.queryForObject("""
                 select timestampdiff(minute, created_at, expires_at)
@@ -368,12 +368,25 @@ class SharedFeedbackControllerIntegrationTest {
         entityManager.flush();
         entityManager.clear();
 
-        share(feedback.getId(), fixture.member(), "{\"shared\":true}")
+        addPrivateEvidence(entityManager.find(Feedback.class, feedback.getId()));
+        var previewResult = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/v1/feedbacks/{feedbackId}/share-preview", feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId())))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        Number previewId = JsonPath.read(previewResult, "$.data.previewId");
+        String approval = """
+                {"shared":true,"previewId":%d,"previewVersion":1}
+                """.formatted(previewId.longValue());
+        share(feedback.getId(), fixture.member(), approval)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.message").value("공유 설정 변경 성공"))
                 .andExpect(jsonPath("$.data.isShared").value(true));
         entityManager.find(Feedback.class, feedback.getId()).addToGuide();
+        share(feedback.getId(), fixture.member(), approval)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("INVALID_STATE"));
+
 
         request(SHARED_CASES, teamId, fixture.leader()).andExpect(jsonPath("$.data.items.length()").value(1));
         request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.groups.length()").value(1));

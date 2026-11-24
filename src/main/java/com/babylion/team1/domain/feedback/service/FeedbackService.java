@@ -9,6 +9,8 @@ import com.babylion.team1.domain.feedback.entity.ReactionType;
 import com.babylion.team1.domain.feedback.repository.FeedbackEvidenceRepository;
 import com.babylion.team1.domain.feedback.repository.FeedbackReactionRepository;
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository;
+import com.babylion.team1.domain.feedback.repository.SharePreviewRepository;
+import java.time.Instant;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +24,7 @@ public class FeedbackService {
     private final FeedbackRepository feedbackRepository;
     private final FeedbackEvidenceRepository evidenceRepository;
     private final FeedbackReactionRepository reactionRepository;
+    private final SharePreviewRepository previews;
 
     @Transactional(readOnly = true)
     public FeedbackDetailResponse getDetail(Long feedbackId, Long userId) {
@@ -32,10 +35,28 @@ public class FeedbackService {
     }
 
     @Transactional
-    public FeedbackShareResponse updateShare(Long feedbackId, Long userId, boolean shared) {
+    public FeedbackShareResponse updateShare(Long feedbackId, Long userId, boolean shared,
+                                              Long previewId, Integer previewVersion) {
         Feedback feedback = lockOwnedFeedback(feedbackId, userId);
         if (shared) {
-            feedback.share();
+            if (previewId == null || previewVersion == null || previewId < 1 || previewVersion < 1) {
+                throw new CustomException(ErrorCode.VALIDATION_FAILED);
+            }
+            var preview = previews.findById(previewId).filter(row -> row.getUser().getId().equals(userId)
+                            && row.getFeedback().getId().equals(feedbackId))
+                    .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+            if (preview.getPreviewVersion() != previewVersion) {
+                throw new CustomException(ErrorCode.VERSION_CONFLICT);
+            }
+            Instant now = Instant.now();
+            if (preview.getConsumedAt() != null || !preview.getExpiresAt().isAfter(now)) {
+                throw new CustomException(ErrorCode.INVALID_STATE);
+            }
+            if (!evidenceRepository.existsByFeedbackId(feedbackId) || evidenceRepository.hasDeletedOriginal(feedbackId)) {
+                throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
+            }
+            feedback.share(preview.getContent());
+            preview.consume(now);
         } else {
             feedback.unshare();
         }

@@ -4,8 +4,11 @@ import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Content;
 import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Example;
 import com.babylion.team1.domain.feedback.entity.SharePreview;
+import com.babylion.team1.domain.feedback.entity.Feedback;
 import com.babylion.team1.domain.feedback.entity.FeedbackType;
 import java.util.Arrays;
+import java.util.List;
+import java.util.regex.Pattern;
 import com.babylion.team1.domain.feedback.repository.FeedbackEvidenceRepository;
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository;
 import com.babylion.team1.domain.feedback.repository.SharePreviewRepository;
@@ -31,32 +34,70 @@ public class SharePreviewService {
         if (!evidence.existsByFeedbackId(feedbackId) || evidence.hasDeletedOriginal(feedbackId)) {
             throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
         }
-        var preview = previews.save(new SharePreview(feedback, publicContent(feedback.getType()), Instant.now()));
+        var preview = previews.save(new SharePreview(feedback, publicContent(feedback, evidence.findOriginalTexts(feedbackId)), Instant.now()));
         return new SharePreviewResponse(preview.getId(), preview.getPreviewVersion(),
                 preview.getExpiresAt().atZone(ZoneId.of("Asia/Seoul")).toOffsetDateTime(),
                 preview.getRedactionStatus(), preview.getContent());
     }
 
-    // Only reviewed templates enter the shared snapshot. Private and model-generated text never enters the preview.
-    private static Content publicContent(String storedType) {
+    private static final Pattern EMAIL = Pattern.compile(
+            "[\\p{L}0-9._%+-]+@[\\p{L}0-9.-]+\\.[\\p{L}]{2,}", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PHONE = Pattern.compile(
+            "(?<![0-9])(?:\\+82[ .-]?|0)(?:[0-9]{1,2})[ .-]?[0-9]{3,4}[ .-]?[0-9]{4}(?![0-9])");
+    private static final Pattern LABELED_IDENTIFIER = Pattern.compile(
+            "(이름|담당자|고객사|회사명|프로젝트(?:명| ID)?|연락처|name|client|project)"
+                    + "\\s*[:=]\\s*(?:[\"‘“'][^\"’”'\\r\\n]+[\"’”']|[^,;\\r\\n]+)",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern RESIDUAL_IDENTIFIER = Pattern.compile(
+            "(?:[\\p{L}0-9._%+-]+@|(?:https?://|www\\.)|\\b[A-Z]{2,}-[0-9]{2,}\\b"
+                    + "|(?:이름|담당자|고객사|회사명|프로젝트(?:명| ID)?|연락처)\\s*[:=])");
+    private static final String REDACTED = "[비공개]";
+
+    private static Content publicContent(Feedback feedback, List<String> originals) {
+        String rawType = feedback.getType();
         String type = Arrays.stream(FeedbackType.values())
-                .filter(value -> value.name().equalsIgnoreCase(storedType) || value.getLabel().equals(storedType))
+                .filter(value -> value.name().equalsIgnoreCase(rawType) || value.getLabel().equals(rawType))
                 .map(Enum::name)
-                .findFirst().orElse(storedType);
-        return switch (type) {
-            case "MISSING_CONTEXT" -> new Content("첫 요청에 목적과 제약을 명시하기", type,
-                    "초반 요청에 작업 맥락이 충분하지 않았습니다.", "목적, 대상, 제약, 원하는 결과 형식을 먼저 적어 주세요.",
-                    new Example("자료를 정리해 줘.", "[목적]에 맞게 [자료]를 정리해 주세요. 조건은 [제약], 출력은 [형식]입니다."));
-            case "LONG_CONVERSATION" -> new Content("긴 대화의 핵심 내용을 요약하기", type,
-                    "이전 요청과 조건이 쌓이면서 맥락이 길어졌습니다.", "확정된 조건과 남은 작업을 요약해 새 대화에서 이어가세요.",
-                    new Example("이어서 작업해 줘.", "목표는 [목표], 확정 조건은 [조건], 남은 작업은 [요청]입니다."));
-            case "OVERSPEC_MODEL" -> new Content("업무에 맞는 모델 선택하기", type,
-                    "간단한 업무에 고비용 모델을 사용했습니다.", "단순 추출이나 정리는 저비용 모델로 먼저 시도해 보세요.",
-                    new Example("내용을 확인해 줘.", "[입력]에서 [필요 항목]만 찾아 [형식]으로 정리해 주세요."));
-            case "OUTPUT_FORMAT" -> new Content("보고서에 출력 형식을 명시하기", type,
-                    "필요한 항목이 처음 요청에 명시되지 않았습니다.", "필수 항목과 확인할 근거를 요청에 포함합니다.",
-                    new Example("보고서 작성해 줘.", "목적, 현황, 근거, 확인 필요 항목으로 작성해 줘."));
-            default -> throw new CustomException(ErrorCode.SHARING_REDACTION_FAILED);
-        };
+                .findFirst().orElse(rawType);
+        if (!type.matches("MISSING_CONTEXT|LONG_CONVERSATION|OVERSPEC_MODEL|OUTPUT_FORMAT")) {
+            throw new CustomException(ErrorCode.SHARING_REDACTION_FAILED);
+        }
+        var identifiers = List.of(feedback.getUser().getName(), feedback.getUser().getEmail(),
+                feedback.getTeam().getName(), feedback.getTeam().getCreatedBy().getName(),
+                feedback.getTeam().getCreatedBy().getEmail());
+        return new Content(redact(feedback.getTitle(), identifiers, originals), type,
+                redact(feedback.getProblem(), identifiers, originals),
+                redact(feedback.getImprovement(), identifiers, originals),
+                new Example(redact(feedback.getExampleBefore(), identifiers, originals),
+                        redact(feedback.getExampleAfter(), identifiers, originals)));
+    }
+
+    private static String redact(String text, List<String> identifiers, List<String> originals) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        String redacted = text;
+        for (String original : originals) {
+            if (original.isBlank()) {
+                continue;
+            }
+            if (original.contains(text.strip())) {
+                return "[원문 제외]";
+            }
+            redacted = redacted.replace(original, "[원문 제외]");
+        }
+        for (String identifier : identifiers) {
+            if (!identifier.isBlank()) {
+                redacted = Pattern.compile(Pattern.quote(identifier), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
+                        .matcher(redacted).replaceAll(REDACTED);
+            }
+        }
+        redacted = LABELED_IDENTIFIER.matcher(redacted).replaceAll(REDACTED);
+        redacted = EMAIL.matcher(redacted).replaceAll(REDACTED);
+        redacted = PHONE.matcher(redacted).replaceAll(REDACTED);
+        if (RESIDUAL_IDENTIFIER.matcher(redacted).find()) {
+            throw new CustomException(ErrorCode.SHARING_REDACTION_FAILED);
+        }
+        return redacted;
     }
 }

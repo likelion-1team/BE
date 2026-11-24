@@ -1,6 +1,7 @@
 package com.babylion.team1.domain.feedback.entity;
 
 import com.babylion.team1.domain.team.entity.Team;
+import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Content;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
@@ -169,9 +170,19 @@ public class Feedback {
 		this.sharedAt = LocalDateTime.now(KST);
 	}
 
+	@JdbcTypeCode(SqlTypes.JSON)
+	@Column(name = "shared_preview_content")
+	private Content sharedPreviewContent;
+
+	public void share(Content content) {
+		sharedPreviewContent = content;
+		share();
+	}
+
 	/** 공유 해제. 가이드에서도 자동 해제 */
 	public void unshare() {
 		this.isShared = false;
+		this.sharedPreviewContent = null;
 		this.sharedAt = null;
 		removeFromGuide();
 	}
