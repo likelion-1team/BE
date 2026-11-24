@@ -72,6 +72,55 @@ class SharedFeedbackControllerIntegrationTest {
     private JdbcTemplate jdbc;
 
     @Test
+    void sharePreviewStoresOnlyPublicTemplatesAndHidesOtherOwners() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT,
+                "김직원 고객사 프로젝트", "private@example.com 010-1234-5678");
+        Long conversationId = addPrivateEvidence(feedback);
+        entityManager.flush();
+        String path = "/api/v1/feedbacks/{feedbackId}/share-preview";
+        var post = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId());
+        String response = mockMvc.perform(post
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code").value("S201"))
+                .andExpect(jsonPath("$.data.previewVersion").value(1))
+                .andExpect(jsonPath("$.data.redactionStatus").value("PASSED"))
+                .andExpect(jsonPath("$.data.content.type").value(MISSING_CONTEXT))
+                .andExpect(jsonPath("$.data.content.example.before").value("자료를 정리해 줘."))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(response).doesNotContain("김직원", "private@example.com", "010-1234-5678", "보호된 원문",
+                "feedbackId", "conversationId");
+        assertThat(jdbc.queryForObject("""
+                select timestampdiff(minute, created_at, expires_at)
+                from share_previews where feedback_id = ?
+                """, Integer.class, feedback.getId())).isEqualTo(30);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.leader().getId())))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        var conversation = entityManager.find(Conversation.class, conversationId);
+        var deleted = saveConversationVersion(conversation, 1, "보호된 원문");
+        conversation.promote(deleted);
+        entityManager.flush();
+        jdbc.update("update conversation_versions set deleted_at = current_timestamp(6) where id = ?", deleted.getId());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId())))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+
+        var unsupported = saveFeedback(fixture.taskType(), fixture.member(), "PRIVATE_CUSTOM", "비공개 유형", null);
+        addPrivateEvidence(unsupported);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, unsupported.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId())))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("SHARING_REDACTION_FAILED"));
+        assertThat(jdbc.queryForObject("select count(*) from share_previews where feedback_id = ?",
+                Integer.class, unsupported.getId())).isZero();
+    }
+
+    @Test
     void feedbackDetailReturnsEvidenceMetadataOnlyToOwner() throws Exception {
         String path = "/api/v1/feedbacks/{feedbackId}";
         TeamFixture fixture = saveTeam();

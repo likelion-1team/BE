@@ -20,6 +20,25 @@ public interface FeedbackEvidenceRepository extends JpaRepository<FeedbackEviden
     }
 
 
+    boolean existsByFeedbackId(Long feedbackId);
+
+    @org.springframework.data.jpa.repository.Query("""
+            select case when count(e) > 0 then true else false end
+            from FeedbackEvidence e left join e.conversation.currentVersion currentVersion
+            where e.feedback.id = :feedbackId and (
+                exists (
+                    select 1 from AnalysisItem item
+                    where item.analysis.upload.id = e.feedback.upload.id
+                        and item.version.conversation.id = e.conversation.id and item.version.deletedAt is not null
+                ) or (currentVersion.deletedAt is not null and not exists (
+                    select 1 from AnalysisItem item
+                    where item.analysis.upload.id = e.feedback.upload.id
+                        and item.version.conversation.id = e.conversation.id
+                ))
+            )
+            """)
+    boolean hasDeletedOriginal(Long feedbackId);
+
     List<FeedbackEvidence> findByFeedbackIdOrderByIdAsc(Long feedbackId);
 
     List<FeedbackEvidence> findByFeedbackIdAndConversationIdAndFeedbackUserId(
