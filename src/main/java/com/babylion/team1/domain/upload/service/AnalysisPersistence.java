@@ -53,7 +53,7 @@ class AnalysisPersistence {
         int skipped = 0;
         for (Prepared item : prepared) {
             String externalId = item.metadata().externalId();
-            var existing = conversations.findByTeamIdAndExternalId(teamId, externalId).orElse(null);
+            var existing = conversations.findByTeamIdAndUserIdAndExternalId(teamId, upload.getUploader().getId(), externalId).orElse(null);
             if (existing != null && !existing.getUpload().getId().equals(uploadId)) {
                 skipped++;
                 continue;
@@ -113,6 +113,16 @@ class AnalysisPersistence {
         return conversation;
     }
 
+    void storeVersionFeedback(Upload upload, Conversation conversation, Long taskTypeId, LocalDate date,
+                              List<Suggestion> suggestions) {
+        var groups = new LinkedHashMap<Group, List<Evidence>>();
+        for (Suggestion suggestion : suggestions) {
+            var key = new Group(taskTypeId, date, suggestion.finding().type());
+            groups.computeIfAbsent(key, ignored -> new ArrayList<>()).add(new Evidence(conversation, suggestion));
+        }
+        groups.forEach((key, matches) -> storeFeedback(upload, key, matches));
+    }
+
     private void storeFeedback(Upload upload, Group key, List<Evidence> matches) {
         var type = key.type();
         var first = matches.get(0);
@@ -121,7 +131,7 @@ class AnalysisPersistence {
             text = new FeedbackText(type.improvement, type.exampleAfter);
         }
         var feedback = feedbacks.save(Feedback.builder().team(upload.getTeam()).upload(upload)
-                .user(upload.getUploader()).taskType(first.conversation().getTaskType()).feedbackDate(key.date())
+                .user(upload.getUploader()).taskType(taskTypes.getReferenceById(key.taskTypeId())).feedbackDate(key.date())
                 .type(type.name()).title(type.title).problem(type.problem).improvement(text.improvement())
                 .exampleBefore(first.suggestion().exampleBefore())
                 .exampleAfter(text.exampleAfter()).occurrenceCount(matches.size())

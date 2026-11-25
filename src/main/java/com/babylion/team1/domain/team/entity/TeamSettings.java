@@ -1,5 +1,7 @@
 package com.babylion.team1.domain.team.entity;
 
+import com.babylion.team1.domain.user.entity.User;
+import com.babylion.team1.global.policy.ServerPolicy;
 import jakarta.persistence.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -11,9 +13,12 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.ColumnDefault;
 
-/** 분석 대상 기간·온보딩 시작일·기준값 (teams와 1:1, 팀 생성 시 기본값으로 생성) */
+/** 분석 대상 기간·온보딩 시작일·기준값 (저장할 때마다 새 버전 생성) */
 @Entity
-@Table(name = "team_settings")
+@Table(name = "team_settings",
+        uniqueConstraints = @UniqueConstraint(name = "uk_team_settings_team_version",
+                columnNames = {"team_id", "version"}),
+        indexes = @Index(name = "idx_team_settings_current", columnList = "team_id, is_current"))
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class TeamSettings {
@@ -29,9 +34,22 @@ public class TeamSettings {
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
 	private Long id;
 
-	@OneToOne(fetch = FetchType.LAZY)
-	@JoinColumn(name = "team_id", nullable = false, unique = true)
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "team_id", nullable = false)
 	private Team team;
+
+	@ColumnDefault("0")
+	@Column(nullable = false, updatable = false)
+	private int version;
+
+	@ColumnDefault("true")
+	@Column(name = "is_current", nullable = false)
+	private boolean current = true;
+
+	/** 이 버전의 업무 유형. 팀장이 설정하기 전 NULL */
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "task_type_id")
+	private TeamTaskType taskType;
 
 	/** 분석 대상 기간. 팀장이 설정하기 전 NULL */
 	@Column(name = "target_from")
@@ -58,6 +76,16 @@ public class TeamSettings {
 	@Column(name = "hourly_labor_cost", nullable = false)
 	private Integer hourlyLaborCost = DEFAULT_HOURLY_LABOR_COST;
 
+	/** 저장 당시 서버 정책 버전 */
+	@ColumnDefault("1")
+	@Column(name = "policy_version", nullable = false, updatable = false)
+	private int policyVersion = ServerPolicy.VERSION;
+
+	/** 저장한 팀장. 팀 생성 시 만든 version 0은 NULL */
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "created_by", updatable = false)
+	private User createdBy;
+
 	@Column(name = "updated_at", nullable = false)
 	private LocalDateTime updatedAt;
 
@@ -69,6 +97,19 @@ public class TeamSettings {
 	/** 팀 생성 시 기본값으로 생성 */
 	public static TeamSettings createDefault(Team team) {
 		return new TeamSettings(team);
+	}
+
+	public TeamSettings nextVersion(TeamTaskType taskType, LocalDate targetFrom, LocalDate targetTo,
+	                                LocalDate onboardingStartDate, Integer targetCount, User createdBy) {
+		TeamSettings next = createDefault(team);
+		next.taskType = taskType;
+		next.createdBy = createdBy;
+		next.version = Math.incrementExact(version);
+		next.minDailyConversations = minDailyConversations;
+		next.hourlyLaborCost = hourlyLaborCost;
+		next.updateTarget(targetFrom, targetTo, onboardingStartDate, targetCount);
+		current = false;
+		return next;
 	}
 
 	public void updateTarget(LocalDate targetFrom, LocalDate targetTo, LocalDate onboardingStartDate, Integer targetCount) {

@@ -11,25 +11,34 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.babylion.team1.domain.analysis.entity.Analysis;
+import com.babylion.team1.domain.analysis.entity.AnalysisItem;
 import com.babylion.team1.domain.conversation.entity.Conversation;
+import com.babylion.team1.domain.conversation.entity.ConversationVersion;
 import com.babylion.team1.domain.conversation.entity.Message;
 import com.babylion.team1.domain.conversation.entity.MessageRole;
+import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Content;
+import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Example;
 import com.babylion.team1.domain.feedback.entity.Feedback;
 import com.babylion.team1.domain.feedback.entity.FeedbackEvidence;
 import com.babylion.team1.domain.feedback.entity.FeedbackReaction;
+import com.babylion.team1.domain.feedback.entity.Guide;
 import com.babylion.team1.domain.feedback.entity.ReactionType;
+import com.babylion.team1.domain.feedback.entity.SharePreview;
+import com.babylion.team1.domain.feedback.entity.SharedCase;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamMember;
+import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -65,9 +74,58 @@ class SharedFeedbackControllerIntegrationTest {
     @Autowired
     private EntityManager entityManager;
     @Autowired
-    private JwtProvider jwtProvider;
+    private TestAccessTokens accessTokens;
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Test
+    void sharePreviewStoresOnlyPublicTemplatesAndHidesOtherOwners() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT,
+                "공유할 작업 요약", "private@example.com 010-1234-5678 형식은 표로 작성");
+        Long conversationId = addPrivateEvidence(feedback);
+        entityManager.flush();
+        String path = "/api/v1/feedbacks/{feedbackId}/share-preview";
+        var post = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId());
+        String response = mockMvc.perform(post
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code").value("S201"))
+                .andExpect(jsonPath("$.data.previewVersion").value(1))
+                .andExpect(jsonPath("$.data.redactionStatus").value("PASSED"))
+                .andExpect(jsonPath("$.data.content.type").value(MISSING_CONTEXT))
+                .andExpect(jsonPath("$.data.content.example.before").value("개선 전 예시"))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(response).contains("형식은 표로 작성").doesNotContain( "private@example.com", "010-1234-5678", "보호된 원문",
+                "feedbackId", "conversationId");
+        assertThat(jdbc.queryForObject("""
+                select timestampdiff(minute, created_at, expires_at)
+                from share_previews where feedback_id = ?
+                """, Integer.class, feedback.getId())).isEqualTo(30);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.leader().getId())))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        var conversation = entityManager.find(Conversation.class, conversationId);
+        var deleted = saveConversationVersion(conversation, 1, "보호된 원문");
+        conversation.promote(deleted);
+        entityManager.flush();
+        jdbc.update("update conversation_versions set deleted_at = current_timestamp(6) where id = ?", deleted.getId());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId())))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+
+        var unsupported = saveFeedback(fixture.taskType(), fixture.member(), "PRIVATE_CUSTOM", "비공개 유형", null);
+        addPrivateEvidence(unsupported);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, unsupported.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId())))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("SHARING_REDACTION_FAILED"));
+        assertThat(jdbc.queryForObject("select count(*) from share_previews where feedback_id = ?",
+                Integer.class, unsupported.getId())).isZero();
+    }
 
     @Test
     void feedbackDetailReturnsEvidenceMetadataOnlyToOwner() throws Exception {
@@ -83,191 +141,298 @@ class SharedFeedbackControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.data.feedbackId").value(feedback.getId()))
-                .andExpect(jsonPath("$.data.type").value(MISSING_CONTEXT_LABEL))
+                .andExpect(jsonPath("$.data.type").value(MISSING_CONTEXT))
                 .andExpect(jsonPath("$.data.title").value("피드백 상세"))
                 .andExpect(jsonPath("$.data.problem").value("문제 요약"))
                 .andExpect(jsonPath("$.data.causes[0]").value("비공개 원인"))
                 .andExpect(jsonPath("$.data.improvement").value("개선 방안"))
                 .andExpect(jsonPath("$.data.example.before").value("개선 전 예시"))
                 .andExpect(jsonPath("$.data.example.after").value(nullValue()))
-                .andExpect(jsonPath("$.data.expectedSaving.tokens").value(300))
-                .andExpect(jsonPath("$.data.expectedSaving.cost").value(180.5))
-                .andExpect(jsonPath("$.data.expectedSaving.turns").value(2))
-                .andExpect(jsonPath("$.data.evidences.length()").value(1))
-                .andExpect(jsonPath("$.data.evidences[0].conversationId").value(conversationId))
-                .andExpect(jsonPath("$.data.evidences[0].turnIndexes[0]").value(0))
+                .andExpect(jsonPath("$.data.expectedSaving.status").value("NOT_MEASURED"))
+                .andExpect(jsonPath("$.data.conversationId").value(conversationId))
+                .andExpect(jsonPath("$.data.evidenceMessageIds[0]").value("m_0"))
+                .andExpect(jsonPath("$.data.sharing.version").value(0))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(body).doesNotContain("보호된 원문");
 
         request(path, feedback.getId(), fixture.leader())
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_FEEDBACK_OWNER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         request(path, Long.MAX_VALUE, fixture.member())
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(get(path, feedback.getId()))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     void conversationDetailReturnsOrderedMessagesAndOnlyMatchingEvidenceToOwner() throws Exception {
-        String path = "/api/v1/conversations/{conversationId}";
+        String path = "/api/v1/conversation-versions/{conversationVersionId}";
         TeamFixture fixture = saveTeam();
         Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "근거 피드백", null);
         feedback.share();
         Long conversationId = addPrivateEvidence(feedback);
         Conversation conversation = entityManager.find(Conversation.class, conversationId);
-        entityManager.persist(Message.builder().conversation(conversation).role(MessageRole.ASSISTANT)
+        var version = saveConversationVersion(conversation, 1, "보호된 원문");
+        var settings = TeamSettings.createDefault(fixture.team());
+        entityManager.persist(settings);
+        var analysis = Analysis.builder().upload(feedback.getUpload()).team(fixture.team()).user(fixture.member())
+                .settings(settings).idempotencyKey("conversation-evidence").requestHash("a".repeat(64))
+                .selectedCount(1).build();
+        entityManager.persist(analysis);
+        entityManager.persist(AnalysisItem.builder().analysis(analysis).version(version).team(fixture.team())
+                .user(fixture.member()).taskType(fixture.taskType()).conversationDate(DATE).build());
+        entityManager.persist(Message.builder().conversation(conversation).version(version).role(MessageRole.ASSISTANT)
                 .idx(2).content("수정한 응답").build());
-        entityManager.persist(Message.builder().conversation(conversation).role(MessageRole.USER)
+        entityManager.persist(Message.builder().conversation(conversation).version(version).role(MessageRole.USER)
                 .idx(1).content("다시 작성해 줘").isRework(true).build());
         Feedback unrelated = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "다른 대화", null);
         addPrivateEvidence(unrelated);
         entityManager.flush();
         entityManager.clear();
 
-        request(path, conversationId, fixture.member(), "highlightFeedbackId", feedback.getId().toString())
+        request(path, version.getId(), fixture.member(), "highlightFeedbackId", feedback.getId().toString())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.data.startedAt").value(DATE + "T12:00:00+09:00"))
                 .andExpect(jsonPath("$.data.messages.length()").value(3))
                 .andExpect(jsonPath("$.data.messages[0].content").value("보호된 원문"))
-                .andExpect(jsonPath("$.data.messages[1].idx").value(1))
-                .andExpect(jsonPath("$.data.messages[1].role").value("user"))
-                .andExpect(jsonPath("$.data.messages[1].isRework").value(true))
-                .andExpect(jsonPath("$.data.messages[2].role").value("assistant"))
-                .andExpect(jsonPath("$.data.highlightIndexes[0]").value(0));
-        request(path, conversationId, fixture.member())
+                .andExpect(jsonPath("$.data.messages[1].messageId").value("m_1"))
+                .andExpect(jsonPath("$.data.messages[1].role").value("USER"))
+                .andExpect(jsonPath("$.data.messages[2].role").value("ASSISTANT"))
+                .andExpect(jsonPath("$.data.highlightMessageIds[0]").value("m_0"));
+        request(path, version.getId(), fixture.member())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.highlightIndexes").isEmpty());
-        request(path, conversationId, fixture.member(), "highlightFeedbackId", unrelated.getId().toString())
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.highlightIndexes").isEmpty());
-        request(path, conversationId, fixture.leader())
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_CONVERSATION_OWNER"));
+                .andExpect(jsonPath("$.data.highlightMessageIds").isEmpty());
+        request(path, version.getId(), fixture.member(), "highlightFeedbackId", unrelated.getId().toString())
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        request(path, version.getId(), fixture.leader())
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         request(path, Long.MAX_VALUE, fixture.member())
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("CONVERSATION_NOT_FOUND"));
-        mockMvc.perform(get(path, conversationId)).andExpect(status().isUnauthorized());
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        mockMvc.perform(get(path, version.getId())).andExpect(status().isUnauthorized());
     }
 
     @Test
-    void sharedCasesReturnOnlyPublicFieldsAndSortTiesById() throws Exception {
+    void conversationDetailSwitchesVersionsWithoutMixingMessages() throws Exception {
+        String path = "/api/v1/conversation-versions/{conversationVersionId}";
         TeamFixture fixture = saveTeam();
-        TeamFixture other = saveTeam();
-        Feedback first = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "공유된 가이드", "개선 후 예시");
-        Feedback second = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "공유된 사례", null);
-        saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "비공개 사례", "비공개 개선 예시");
-        Feedback otherShared = saveFeedback(other.taskType(), other.member(), MISSING_CONTEXT, "다른 팀 사례", null);
-        publishGuide(first);
-        second.share();
-        otherShared.share();
-        addPrivateEvidence(first);
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "버전 테스트", null);
+        Long conversationId = addPrivateEvidence(feedback);
+        Conversation conversation = entityManager.find(Conversation.class, conversationId);
+        var first = saveConversationVersion(conversation, 1, "첫 번째 원문");
+        var second = saveConversationVersion(conversation, 2, "재업로드 원문");
+        conversation.promote(first);
         entityManager.flush();
-        jdbc.update("update feedbacks set shared_at = ? where id in (?, ?)",
-                DATE.atTime(12, 0), first.getId(), second.getId());
         entityManager.clear();
 
-        String body = request(SHARED_CASES, fixture.team().getId(), fixture.leader())
+        request(path, first.getId(), fixture.member())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.messages.length()").value(1))
+                .andExpect(jsonPath("$.data.messages[0].content").value("첫 번째 원문"));
+
+        entityManager.find(Conversation.class, conversationId)
+                .promote(entityManager.find(ConversationVersion.class, second.getId()));
+        entityManager.flush();
+        entityManager.clear();
+
+        request(path, first.getId(), fixture.member())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.messages[0].content").value("첫 번째 원문"));
+        request(path, second.getId(), fixture.member())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.messages.length()").value(1))
+                .andExpect(jsonPath("$.data.messages[0].content").value("재업로드 원문"));
+    }
+
+    private ConversationVersion saveConversationVersion(Conversation conversation, int version, String content) {
+        var saved = ConversationVersion.builder().conversation(conversation).sourceUpload(conversation.getUpload())
+                .inputVersion(version).contentHash(Integer.toString(version).repeat(64))
+                .startedAt(Instant.parse("2026-11-20T03:00:00Z")).conversationDate(DATE).turnCount(1).build();
+        entityManager.persist(saved);
+        entityManager.persist(Message.builder().conversation(conversation).version(saved).role(MessageRole.USER)
+                .idx(0).content(content).build());
+        return saved;
+    }
+
+    @Test
+    void sharedCasesExposeOnlyApprovedSnapshotsAndPageTiesById() throws Exception {
+        TeamFixture fixture = saveTeam();
+        TeamFixture other = saveTeam();
+        Instant sharedAt = Instant.parse("2026-11-20T12:00:00Z");
+        Feedback first = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "비공개 제목", null);
+        Feedback second = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "공유된 사례", null);
+        Feedback legacyGuide = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "이전 가이드", null);
+        legacyGuide.share();
+        legacyGuide.addToGuide();
+        saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "비공개 사례", null);
+        Feedback foreign = saveFeedback(other.taskType(), other.member(), MISSING_CONTEXT, "다른 팀 사례", null);
+        SharedCase firstCase = approveCase(first, MISSING_CONTEXT, "승인 제목", "개선 후 예시", sharedAt);
+        SharedCase secondCase = approveCase(second, LONG_CONVERSATION, "승인 사례", null, sharedAt);
+        approveCase(foreign, MISSING_CONTEXT, "다른 팀 승인 사례", null, sharedAt);
+        entityManager.persist(new Guide(firstCase, fixture.leader(), sharedAt));
+        addPrivateEvidence(first);
+
+        Long teamId = fixture.team().getId();
+        String body = request(SHARED_CASES, teamId, fixture.leader())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.message").value("조회 성공"))
                 .andExpect(jsonPath("$.errors").value(nullValue()))
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.total").value(2))
                 .andExpect(jsonPath("$.data.items.length()").value(2))
-                .andExpect(jsonPath("$.data.items[0].feedbackId").value(second.getId()))
-                .andExpect(jsonPath("$.data.items[0].type").value("긴 대화"))
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(secondCase.getId()))
+                .andExpect(jsonPath("$.data.items[0].type").value(LONG_CONVERSATION))
                 .andExpect(jsonPath("$.data.items[0].example.after").value(nullValue()))
                 .andExpect(jsonPath("$.data.items[0].isGuide").value(false))
-                .andExpect(jsonPath("$.data.items[1].feedbackId").value(first.getId()))
-                .andExpect(jsonPath("$.data.items[1].taskType").value(fixture.taskType().getName()))
-                .andExpect(jsonPath("$.data.items[1].type").value(MISSING_CONTEXT_LABEL))
-                .andExpect(jsonPath("$.data.items[1].example.before").value("개선 전 예시"))
+                .andExpect(jsonPath("$.data.items[1].sharedCaseId").value(firstCase.getId()))
+                .andExpect(jsonPath("$.data.items[1].shareVersion").value(1))
+                .andExpect(jsonPath("$.data.items[1].taskTypeId").value(fixture.taskType().getId()))
+                .andExpect(jsonPath("$.data.items[1].type").value(MISSING_CONTEXT))
+                .andExpect(jsonPath("$.data.items[1].title").value("승인 제목"))
+                .andExpect(jsonPath("$.data.items[1].problem").value("승인 문제"))
+                .andExpect(jsonPath("$.data.items[1].improvement").value("승인 개선 방안"))
+                .andExpect(jsonPath("$.data.items[1].example.before").value("승인 전 예시"))
                 .andExpect(jsonPath("$.data.items[1].example.after").value("개선 후 예시"))
                 .andExpect(jsonPath("$.data.items[1].isGuide").value(true))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
 
+        Map<String, Object> data = JsonPath.read(body, "$.data");
+        assertThat(data).containsOnlyKeys("items", "page", "size", "total");
         Map<String, Object> publicItem = JsonPath.read(body, "$.data.items[1]");
-        assertThat(publicItem).containsOnlyKeys("feedbackId", "taskType", "type", "title", "problem",
-                "improvement", "example", "isGuide");
-        assertThat(body).doesNotContain(fixture.member().getEmail(), "보호된 원문", "비공개 원인");
-    }
+        assertThat(publicItem).containsOnlyKeys("sharedCaseId", "shareVersion", "taskTypeId", "type", "title",
+                "problem", "improvement", "example", "isGuide");
+        assertThat(body).doesNotContain(fixture.member().getEmail(), "보호된 원문", "비공개 제목", "비공개 원인");
 
-    @Test
-    void sharedCasesFilterByTaskIdAndRecognizeBothTypeRepresentations() throws Exception {
-        TeamFixture fixture = saveTeam();
-        TeamFixture other = saveTeam();
-        TeamTaskType minutes = saveTaskType(fixture.team(), "회의록");
-        Feedback coded = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "코드 사례", null);
-        Feedback legacy = saveFeedback(minutes, fixture.member(), MISSING_CONTEXT_LABEL, "이전 유형명 사례", null);
-        Feedback longCase = saveFeedback(minutes, fixture.member(), LONG_CONVERSATION, "긴 대화 사례", null);
-        coded.share();
-        legacy.share();
-        longCase.share();
-        Long teamId = fixture.team().getId();
-
-        request(SHARED_CASES, teamId, fixture.leader(), "taskType", minutes.getId().toString())
-                .andExpect(jsonPath("$.data.items.length()").value(2));
-        request(SHARED_CASES, teamId, fixture.leader(), "type", MISSING_CONTEXT_LABEL)
-                .andExpect(jsonPath("$.data.items.length()").value(2));
-        request(SHARED_CASES, teamId, fixture.leader(), "type", MISSING_CONTEXT)
-                .andExpect(jsonPath("$.data.items.length()").value(2));
-        request(SHARED_CASES, teamId, fixture.leader(), "taskType", minutes.getId().toString(),
-                "type", MISSING_CONTEXT_LABEL)
+        request(SHARED_CASES, teamId, fixture.leader(), "page", "1", "size", "1")
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(secondCase.getId()))
+                .andExpect(jsonPath("$.data.total").value(2));
+        request(SHARED_CASES, teamId, fixture.leader(), "page", "2", "size", "1")
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(firstCase.getId()))
+                .andExpect(jsonPath("$.data.page").value(2))
+                .andExpect(jsonPath("$.data.size").value(1))
+                .andExpect(jsonPath("$.data.total").value(2));
+        request(SHARED_CASES, teamId, fixture.leader(), "page", "3", "size", "1")
+                .andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(2));
+        request(GUIDES, teamId, fixture.member())
                 .andExpect(jsonPath("$.data.items.length()").value(1))
-                .andExpect(jsonPath("$.data.items[0].feedbackId").value(legacy.getId()));
-        request(SHARED_CASES, teamId, fixture.leader(), "taskType", other.taskType().getId().toString())
-                .andExpect(jsonPath("$.data.items").isEmpty());
-        request(SHARED_CASES, teamId, fixture.leader(), "type", "존재하지 않는 유형")
-                .andExpect(jsonPath("$.data.items").isEmpty());
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(firstCase.getId()))
+                .andExpect(jsonPath("$.data.total").value(1));
     }
 
     @Test
-    void teamMemberReadsGuidesGroupedByTypeWithKstTimestamps() throws Exception {
+    void filtersBothListsByApprovedTypeBeforePaging() throws Exception {
         TeamFixture fixture = saveTeam();
-        TeamFixture other = saveTeam();
-        Feedback older = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "기존 가이드", "개선 후 예시");
-        Feedback latest = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT_LABEL, "최신 가이드", null);
-        Feedback otherType = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "긴 대화 가이드", null);
-        Feedback sharedOnly = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "공유만 허용", null);
-        Feedback foreign = saveFeedback(other.taskType(), other.member(), MISSING_CONTEXT, "타 팀 가이드", null);
-        publishGuide(older);
-        publishGuide(latest);
-        publishGuide(otherType);
-        publishGuide(foreign);
-        sharedOnly.share();
-        entityManager.flush();
-        setGuideDate(older, DATE.minusDays(1).atTime(17, 30));
-        setGuideDate(latest, DATE.plusDays(1).atTime(17, 30));
-        setGuideDate(otherType, DATE.atTime(17, 30));
-        entityManager.clear();
-
+        TeamTaskType minutes = saveTaskType(fixture.team(), "회의록");
+        Instant now = Instant.parse("2026-11-20T12:00:00Z");
+        Feedback first = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "형식 사례", null);
+        Feedback second = saveFeedback(minutes, fixture.member(), LONG_CONVERSATION, "형식 가이드", null);
+        Feedback third = saveFeedback(minutes, fixture.member(), MISSING_CONTEXT_LABEL, "맥락 가이드", null);
+        SharedCase format = approveCase(first, "OUTPUT_FORMAT", "승인 형식 사례", null, now);
+        SharedCase formatGuide = approveCase(second, "OUTPUT_FORMAT", "승인 형식 가이드", null, now);
+        SharedCase contextGuide = approveCase(third, MISSING_CONTEXT, "승인 맥락 가이드", null, now);
+        entityManager.persist(new Guide(formatGuide, fixture.leader(), now));
+        entityManager.persist(new Guide(contextGuide, fixture.leader(), now.plusSeconds(1)));
         Long teamId = fixture.team().getId();
+
+        request(SHARED_CASES, teamId, fixture.leader(), "type", "OUTPUT_FORMAT", "page", "2", "size", "1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(format.getId()))
+                .andExpect(jsonPath("$.data.items[0].type").value("OUTPUT_FORMAT"))
+                .andExpect(jsonPath("$.data.total").value(2));
+        request(GUIDES, teamId, fixture.member(), "type", "OUTPUT_FORMAT", "size", "1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(formatGuide.getId()))
+                .andExpect(jsonPath("$.data.total").value(1));
+        request(GUIDES, teamId, fixture.member(), "type", MISSING_CONTEXT_LABEL)
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(contextGuide.getId()))
+                .andExpect(jsonPath("$.data.items[0].type").value(MISSING_CONTEXT));
+        request(SHARED_CASES, teamId, fixture.leader(), "type", "UNKNOWN")
+                .andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(0));
+    }
+
+    @Test
+    void teamMemberReadsFlatGuideItemsPagedByDesignationTime() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Instant now = Instant.parse("2026-11-20T12:00:00Z");
+        Feedback first = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "먼저 지정", null);
+        Feedback second = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "나중에 지정", null);
+        SharedCase firstCase = approveCase(first, MISSING_CONTEXT, "먼저 지정", null, now.plusSeconds(10));
+        SharedCase secondCase = approveCase(second, LONG_CONVERSATION, "나중에 지정", null, now);
+        entityManager.persist(new Guide(firstCase, fixture.leader(), now.plusSeconds(20)));
+        entityManager.persist(new Guide(secondCase, fixture.leader(), now.plusSeconds(30)));
+        Long teamId = fixture.team().getId();
+
         String body = request(GUIDES, teamId, fixture.member())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.groups.length()").value(2))
-                .andExpect(jsonPath("$.data.groups[0].type").value(MISSING_CONTEXT_LABEL))
-                .andExpect(jsonPath("$.data.groups[0].guides.length()").value(2))
-                .andExpect(jsonPath("$.data.groups[0].guides[0].feedbackId").value(latest.getId()))
-                .andExpect(jsonPath("$.data.groups[0].guides[1].feedbackId").value(older.getId()))
-                .andExpect(jsonPath("$.data.groups[0].guides[0].guideAddedAt").value("2026-11-21T17:30:00+09:00"))
-                .andExpect(jsonPath("$.data.groups[0].guides[0].example.before").value("개선 전 예시"))
-                .andExpect(jsonPath("$.data.groups[0].guides[0].example.after").value(nullValue()))
-                .andExpect(jsonPath("$.data.groups[1].type").value("긴 대화"))
-                .andExpect(jsonPath("$.data.groups[1].guides[0].feedbackId").value(otherType.getId()))
+                .andExpect(jsonPath("$.code").value("S200"))
+                .andExpect(jsonPath("$.message").value("조회 성공"))
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(secondCase.getId()))
+                .andExpect(jsonPath("$.data.items[0].taskTypeId").value(fixture.taskType().getId()))
+                .andExpect(jsonPath("$.data.items[0].shareVersion").value(1))
+                .andExpect(jsonPath("$.data.items[0].isGuide").value(true))
+                .andExpect(jsonPath("$.data.items[1].sharedCaseId").value(firstCase.getId()))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
 
-        Map<String, Object> guide = JsonPath.read(body, "$.data.groups[0].guides[0]");
-        assertThat(guide).containsOnlyKeys("feedbackId", "title", "problem", "improvement", "example", "guideAddedAt");
-        assertThat(body).doesNotContain(fixture.member().getEmail(), "공유만 허용", "타 팀 가이드");
-        request(GUIDES, teamId, fixture.leader(), "type", MISSING_CONTEXT)
-                .andExpect(jsonPath("$.data.groups.length()").value(1))
-                .andExpect(jsonPath("$.data.groups[0].guides.length()").value(2));
-        request(GUIDES, teamId, fixture.member(), "type", MISSING_CONTEXT_LABEL)
-                .andExpect(jsonPath("$.data.groups.length()").value(1))
-                .andExpect(jsonPath("$.data.groups[0].guides.length()").value(2));
-        request(GUIDES, teamId, fixture.member(), "type", "존재하지 않는 유형")
-                .andExpect(jsonPath("$.data.groups").isEmpty());
+        Map<String, Object> data = JsonPath.read(body, "$.data");
+        assertThat(data).containsOnlyKeys("items", "page", "size", "total");
+        Map<String, Object> item = JsonPath.read(body, "$.data.items[0]");
+        assertThat(item).containsOnlyKeys("sharedCaseId", "shareVersion", "taskTypeId", "type", "title", "problem",
+                "improvement", "example", "isGuide");
+        request(GUIDES, teamId, fixture.leader(), "page", "2", "size", "1")
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(firstCase.getId()))
+                .andExpect(jsonPath("$.data.page").value(2))
+                .andExpect(jsonPath("$.data.size").value(1))
+                .andExpect(jsonPath("$.data.total").value(2));
+    }
+
+    @Test
+    void deletedAnalyzedVersionIsExcludedEvenWhenTheCurrentVersionIsAvailable() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Instant now = Instant.parse("2026-11-20T12:00:00Z");
+        Feedback deleted = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "삭제 대상", null);
+        Feedback visible = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "공개 대상", null);
+        Conversation conversation = entityManager.find(Conversation.class, addPrivateEvidence(deleted));
+        ConversationVersion version = saveConversationVersion(conversation, 1, "보호된 원문");
+        conversation.promote(saveConversationVersion(conversation, 2, "현행 버전 원문"));
+        TeamSettings settings = TeamSettings.createDefault(fixture.team());
+        entityManager.persist(settings);
+        Analysis analysis = Analysis.builder().upload(deleted.getUpload()).team(fixture.team()).user(fixture.member())
+                .settings(settings).idempotencyKey("shared-case-deleted-original").requestHash("a".repeat(64))
+                .selectedCount(1).build();
+        entityManager.persist(analysis);
+        entityManager.persist(AnalysisItem.builder().analysis(analysis).version(version).team(fixture.team())
+                .user(fixture.member()).taskType(fixture.taskType()).conversationDate(DATE).build());
+        SharedCase deletedCase = approveCase(deleted, MISSING_CONTEXT, "삭제 대상", null, now.plusSeconds(10));
+        SharedCase visibleCase = approveCase(visible, MISSING_CONTEXT, "공개 대상", null, now);
+        entityManager.persist(new Guide(deletedCase, fixture.leader(), now.plusSeconds(20)));
+        entityManager.persist(new Guide(visibleCase, fixture.leader(), now));
+        entityManager.flush();
+        Long teamId = fixture.team().getId();
+
+        request(SHARED_CASES, teamId, fixture.leader()).andExpect(jsonPath("$.data.total").value(2));
+        request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.total").value(2));
+
+        jdbc.update("update conversation_versions set deleted_at = current_timestamp(6) where id = ?", version.getId());
+        request(SHARED_CASES, teamId, fixture.leader(), "size", "1")
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(visibleCase.getId()))
+                .andExpect(jsonPath("$.data.total").value(1));
+        request(GUIDES, teamId, fixture.member(), "size", "1")
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(visibleCase.getId()))
+                .andExpect(jsonPath("$.data.total").value(1));
+        designateGuide(teamId, deletedCase.getId(), fixture.leader(), 1)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
 
     @Test
@@ -278,27 +443,85 @@ class SharedFeedbackControllerIntegrationTest {
         entityManager.flush();
         entityManager.clear();
 
-        share(feedback.getId(), fixture.member(), "{\"shared\":true}")
+        addPrivateEvidence(entityManager.find(Feedback.class, feedback.getId()));
+        String approval = """
+                {"shared":true,"expectedShareVersion":0,"previewId":%d,"previewVersion":1}
+                """.formatted(createSharePreview(feedback.getId(), fixture.member()));
+        share(feedback.getId(), fixture.member(), approval.replace("expectedShareVersion\":0", "expectedShareVersion\":9"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+        share(feedback.getId(), fixture.member(), approval)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
-                .andExpect(jsonPath("$.message").value("공유 설정 변경 성공"))
-                .andExpect(jsonPath("$.data.isShared").value(true));
-        entityManager.find(Feedback.class, feedback.getId()).addToGuide();
+                .andExpect(jsonPath("$.message").value("공유 상태 변경 성공"))
+                .andExpect(jsonPath("$.data.shared").value(true));
+        String listed = request(SHARED_CASES, teamId, fixture.leader())
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        Number originalCaseId = JsonPath.read(listed, "$.data.items[0].sharedCaseId");
+        Number initialShareVersion = JsonPath.read(listed, "$.data.items[0].shareVersion");
+        designateGuide(teamId, originalCaseId.longValue(), fixture.leader(), initialShareVersion.intValue())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.sharedCaseId").value(originalCaseId.longValue()))
+                .andExpect(jsonPath("$.data.isGuide").value(true));
+        assertThat(jdbc.queryForObject("""
+                select count(*) from guides g join shared_cases c on c.id = g.shared_case_id
+                where c.feedback_id = ? and c.status = 'ACTIVE'
+                """, Integer.class, feedback.getId())).isEqualTo(1);
+        share(feedback.getId(), fixture.member(), approval)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.shareVersion").value(1));
+
 
         request(SHARED_CASES, teamId, fixture.leader()).andExpect(jsonPath("$.data.items.length()").value(1));
-        request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.groups.length()").value(1));
+        request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.items.length()").value(1));
 
         share(feedback.getId(), fixture.member(), "{\"shared\":false}")
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.isShared").value(false));
+                .andExpect(jsonPath("$.data.shared").value(false))
+                .andExpect(jsonPath("$.data.shareVersion").value(2));
         entityManager.flush();
         entityManager.clear();
         Feedback revoked = entityManager.find(Feedback.class, feedback.getId());
         assertThat(revoked.getIsGuide()).isFalse();
         assertThat(revoked.getSharedAt()).isNull();
+        assertThat(jdbc.queryForObject("select status from shared_cases where feedback_id = ?",
+                String.class, feedback.getId())).isEqualTo("REVOKED");
+        assertThat(jdbc.queryForObject("""
+                select count(*) from guides g join shared_cases c on c.id = g.shared_case_id
+                where c.feedback_id = ?
+                """, Integer.class, feedback.getId())).isZero();
         assertThat(revoked.getGuideAddedAt()).isNull();
-        request(SHARED_CASES, teamId, fixture.leader()).andExpect(jsonPath("$.data.items").isEmpty());
-        request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.groups").isEmpty());
+        request(SHARED_CASES, teamId, fixture.leader()).andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(0));
+        request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(0));
+
+        designateGuide(teamId, originalCaseId.longValue(), fixture.leader(), initialShareVersion.intValue())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("SHARING_REVOKED"));
+        String nextApproval = """
+                {"shared":true,"expectedShareVersion":2,"previewId":%d,"previewVersion":1}
+                """.formatted(createSharePreview(feedback.getId(), fixture.member()));
+        String approvedAgain = share(feedback.getId(), fixture.member(), nextApproval)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.shareVersion").value(3))
+                .andReturn().getResponse().getContentAsString();
+        Number newCaseId = JsonPath.read(approvedAgain, "$.data.sharedCaseId");
+        assertThat(newCaseId.longValue()).isNotEqualTo(originalCaseId.longValue());
+        designateGuide(teamId, originalCaseId.longValue(), fixture.leader(), 3)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("SHARING_REVOKED"));
+        designateGuide(teamId, newCaseId.longValue(), fixture.leader(), 3)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.sharedCaseId").value(newCaseId.longValue()));
+        mockMvc.perform(delete("/api/v1/teams/{teamId}/guides/{sharedCaseId}", teamId, originalCaseId.longValue())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.leader().getId())))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+        request(GUIDES, teamId, fixture.member())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].shareVersion").value(3))
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(newCaseId.longValue()));
     }
 
     @Test
@@ -311,11 +534,11 @@ class SharedFeedbackControllerIntegrationTest {
                         .content("{\"shared\":true}"))
                 .andExpect(status().isUnauthorized());
         share(feedbackId, fixture.leader(), "{\"shared\":true}")
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_FEEDBACK_OWNER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         share(Long.MAX_VALUE, fixture.member(), "{\"shared\":true}")
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         share(feedbackId, fixture.member(), "{}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
@@ -329,17 +552,23 @@ class SharedFeedbackControllerIntegrationTest {
         Long teamId = fixture.team().getId();
 
         request(SHARED_CASES, teamId, fixture.member()).andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
-        request(SHARED_CASES, teamId, other.leader()).andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
-        request(GUIDES, teamId, other.leader()).andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
+        request(SHARED_CASES, teamId, other.leader()).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        request(GUIDES, teamId, other.leader()).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         request(SHARED_CASES, Long.MAX_VALUE, fixture.leader()).andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("TEAM_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         request(GUIDES, Long.MAX_VALUE, fixture.leader()).andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("TEAM_NOT_FOUND"));
-        request(SHARED_CASES, teamId, fixture.leader(), "taskType", "invalid")
-                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_TYPE"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        for (String path : List.of(SHARED_CASES, GUIDES)) {
+            request(path, teamId, fixture.leader(), "size", "100").andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.size").value(100));
+            request(path, teamId, fixture.leader(), "size", "101").andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+            request(path, teamId, fixture.leader(), "page", "0").andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        }
         mockMvc.perform(get(SHARED_CASES, teamId)).andExpect(status().isUnauthorized());
         mockMvc.perform(get(GUIDES, teamId)).andExpect(status().isUnauthorized());
     }
@@ -358,80 +587,50 @@ class SharedFeedbackControllerIntegrationTest {
         Feedback own = saveFeedback(fixture.taskType(), fixture.leader(), MISSING_CONTEXT, "팀장 본인", null);
         Feedback member = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "팀원 본인", null);
         saveFeedback(other.taskType(), fixture.leader(), MISSING_CONTEXT, "다른 팀 피드백", null);
-        own.share();
+        addPrivateEvidence(own);
+        addPrivateEvidence(member);
         entityManager.persist(FeedbackReaction.builder().feedback(own).user(fixture.leader())
-                .reaction(ReactionType.HELPFUL).build());
-        entityManager.persist(FeedbackReaction.builder().feedback(member).user(fixture.leader())
                 .reaction(ReactionType.HELPFUL).build());
         entityManager.flush();
 
         Long teamId = fixture.team().getId();
         request(MY_FEEDBACKS, teamId, fixture.leader())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("S200"))
-                .andExpect(jsonPath("$.message").value("조회 성공"))
-                .andExpect(jsonPath("$.data.days.length()").value(1))
-                .andExpect(jsonPath("$.data.days[0].date").value(DATE.toString()))
-                .andExpect(jsonPath("$.data.days[0].feedbacks.length()").value(1))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].feedbackId").value(own.getId()))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].expectedSaving.tokens").value(300))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].expectedSaving.cost").value(180.5))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].expectedSaving.turns").value(2))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].isShared").value(true))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].myReaction").value("HELPFUL"));
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].feedbackId").value(own.getId()))
+                .andExpect(jsonPath("$.data.items[0].expectedSaving.status").value("NOT_MEASURED"))
+                .andExpect(jsonPath("$.data.items[0].reaction").value("HELPFUL"));
         request(MY_FEEDBACKS, teamId, fixture.member())
-                .andExpect(jsonPath("$.data.days[0].feedbacks.length()").value(1))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].feedbackId").value(member.getId()))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].myReaction").value(nullValue()));
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].feedbackId").value(member.getId()))
+                .andExpect(jsonPath("$.data.items[0].reaction").value(nullValue()));
         request(MY_FEEDBACKS, teamId, other.leader())
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(get(MY_FEEDBACKS, teamId)).andExpect(status().isUnauthorized());
     }
 
     @Test
-    void myFeedbacksApplyInclusiveDatesAndTypesBeforePagingAndSortWithinEachDay() throws Exception {
+    void myFeedbacksFilterBeforePagingAndExcludeUnverifiedResults() throws Exception {
         TeamFixture fixture = saveTeam();
-        Feedback saving = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT,
-                "절감 우선", null, DATE, 1, 1000);
-        Feedback frequency = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT_LABEL,
-                "빈도 우선", null, DATE, 5, 10);
-        saveFeedback(fixture.taskType(), fixture.member(), "OVERSPEC_MODEL",
-                "필터 제외", null, DATE, 100, 10000);
-        Feedback older = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION,
-                "전날", null, DATE.minusDays(1), 1, 10000);
-        for (int day = 2; day <= 20; day++) {
-            saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT,
-                    "이전 피드백", null, DATE.minusDays(day), 1, 1);
-        }
+        var first = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "근거 있음", null);
+        var second = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "다른 근거", null);
+        saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "근거 없음", null);
+        addPrivateEvidence(first);
+        addPrivateEvidence(second);
         entityManager.flush();
-
         Long teamId = fixture.team().getId();
         User member = fixture.member();
-        request(MY_FEEDBACKS, teamId, member, "from", DATE.minusDays(1).toString(), "to", DATE.toString(),
-                "types", "맥락 누락,LONG_CONVERSATION", "sort", "SAVING")
-                .andExpect(jsonPath("$.data.days.length()").value(2))
-                .andExpect(jsonPath("$.data.days[0].feedbacks.length()").value(2))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].feedbackId").value(saving.getId()))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[1].type").value(MISSING_CONTEXT_LABEL))
-                .andExpect(jsonPath("$.data.days[1].feedbacks[0].feedbackId").value(older.getId()));
-        request(MY_FEEDBACKS, teamId, member, "types", MISSING_CONTEXT_LABEL, "sort", "FREQUENCY")
-                .andExpect(jsonPath("$.data.days[0].feedbacks.length()").value(2))
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].feedbackId").value(frequency.getId()));
-        request(MY_FEEDBACKS, teamId, member, "types", MISSING_CONTEXT_LABEL)
-                .andExpect(jsonPath("$.data.days[0].feedbacks[0].feedbackId").value(frequency.getId()));
-        request(MY_FEEDBACKS, teamId, member)
-                .andExpect(jsonPath("$.data.days.length()").value(20))
-                .andExpect(jsonPath("$.data.days[0].feedbacks.length()").value(3));
-        request(MY_FEEDBACKS, teamId, member, "page", "1")
-                .andExpect(jsonPath("$.data.days.length()").value(1))
-                .andExpect(jsonPath("$.data.days[0].date").value(DATE.minusDays(20).toString()));
-        request(MY_FEEDBACKS, teamId, member, "page", "2")
-                .andExpect(jsonPath("$.data.days").isEmpty());
-        request(MY_FEEDBACKS, teamId, member, "page", "-1")
-                .andExpect(status().isBadRequest());
-        request(MY_FEEDBACKS, teamId, member, "from", DATE.toString(), "to", DATE.minusDays(1).toString())
-                .andExpect(status().isBadRequest());
+
+        request(MY_FEEDBACKS, teamId, member, "type", MISSING_CONTEXT, "size", "1", "sort", "FREQUENCY",
+                "from", DATE.toString(), "to", DATE.toString())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items[0].occurrenceCount").value(1));
+        request(MY_FEEDBACKS, teamId, member, "sort", "SAVING")
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
     }
 
     @Test
@@ -440,7 +639,7 @@ class SharedFeedbackControllerIntegrationTest {
         Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "반응", null);
         entityManager.flush();
         Long id = feedback.getId();
-        String ownerToken = "Bearer " + jwtProvider.createAccessToken(fixture.member().getId());
+        String ownerToken = "Bearer " + accessTokens.create(fixture.member().getId());
 
         recordReaction(id, ownerToken, """
                 {"reaction":"NOT_APPLICABLE","reason":"이미 지정했음"}
@@ -478,30 +677,58 @@ class SharedFeedbackControllerIntegrationTest {
         Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "반응 권한", null);
         entityManager.flush();
         Long id = feedback.getId();
-        String ownerToken = "Bearer " + jwtProvider.createAccessToken(fixture.member().getId());
-        String leaderToken = "Bearer " + jwtProvider.createAccessToken(fixture.leader().getId());
+        String ownerToken = "Bearer " + accessTokens.create(fixture.member().getId());
+        String leaderToken = "Bearer " + accessTokens.create(fixture.leader().getId());
         String validBody = "{\"reaction\":\"HELPFUL\"}";
 
         for (String body : List.of("{}", "{\"reaction\":\"UNKNOWN\"}",
-                "{\"reaction\":\"HELPFUL\",\"reason\":\"사유\"}",
-                "{\"reaction\":\"NOT_APPLICABLE\",\"reason\":\"" + "a".repeat(201) + "\"}")) {
+                "{\"reaction\":\"NOT_APPLICABLE\",\"reason\":\"" + "a".repeat(501) + "\"}")) {
             recordReaction(id, ownerToken, body)
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+                    .andExpect(status().isUnprocessableContent())
+                    .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
         }
+        recordReaction(id, ownerToken, "{\"reaction\":\"HELPFUL\",\"reason\":\"사유\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.reason").value("사유"));
         recordReaction(id, leaderToken, validBody)
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_FEEDBACK_OWNER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         recordReaction(Long.MAX_VALUE, ownerToken, validBody)
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(delete(REACTION, id).header(HttpHeaders.AUTHORIZATION, leaderToken))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_FEEDBACK_OWNER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(delete(REACTION, Long.MAX_VALUE).header(HttpHeaders.AUTHORIZATION, ownerToken))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(delete(REACTION, id)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void reactionCannotBeCancelledWhenOriginalWasDeleted() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "반응", null);
+        var conversation = entityManager.find(Conversation.class, addPrivateEvidence(feedback));
+        var version = saveConversationVersion(conversation, 1, "보호된 원문");
+        conversation.promote(version);
+        entityManager.flush();
+        String ownerToken = "Bearer " + accessTokens.create(fixture.member().getId());
+        recordReaction(feedback.getId(), ownerToken, """
+                {"reaction":"HELPFUL"}
+                """).andExpect(status().isOk());
+
+        jdbc.update("update conversation_versions set deleted_at = current_timestamp(6) where id = ?", version.getId());
+        recordReaction(feedback.getId(), ownerToken, "{\"reaction\":\"HELPFUL\"}")
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        request("/api/v1/feedbacks/{feedbackId}", feedback.getId(), fixture.member())
+                .andExpect(status().isGone()).andExpect(jsonPath("$.code").value("SOURCE_DELETED"));
+        mockMvc.perform(delete(REACTION, feedback.getId()).header(HttpHeaders.AUTHORIZATION, ownerToken))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        assertThat(jdbc.queryForObject("select count(*) from feedback_reactions where feedback_id = ?",
+                Long.class, feedback.getId())).isEqualTo(1L);
     }
 
     private ResultActions recordReaction(Long feedbackId, String token, String body) throws Exception {
@@ -509,6 +736,44 @@ class SharedFeedbackControllerIntegrationTest {
                 .header(HttpHeaders.AUTHORIZATION, token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));
+    }
+
+    @Test
+    void recordsUsageOnceAndRejectsConflictingReuses() throws Exception {
+        var fixture = saveTeam();
+        var feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "활용 기록", null);
+        var other = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "다른 피드백", null);
+        String eventId = java.util.UUID.randomUUID().toString();
+        String path = "/api/v1/feedbacks/{feedbackId}/usage-events";
+        String body = """
+                {"eventId":"%s","eventType":"COPY_SUCCEEDED"}
+                """.formatted(eventId);
+        var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId())
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId()))
+                .contentType("application/json").content(body);
+
+        var first = mockMvc.perform(request).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.eventId").value(eventId))
+                .andExpect(jsonPath("$.data.eventType").value("COPY_SUCCEEDED"))
+                .andReturn().getResponse().getContentAsString();
+        var retry = mockMvc.perform(request).andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(retry).isEqualTo(first);
+
+        mockMvc.perform(request.content(body.replace("COPY_SUCCEEDED", "USE_CONFIRMED")))
+                .andExpect(status().isConflict());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, other.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId()))
+                        .contentType("application/json").content(body))
+                .andExpect(status().isConflict());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.leader().getId()))
+                        .contentType("application/json").content(body))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(request.content(body.replace(eventId, "invalid")))
+                .andExpect(status().isUnprocessableEntity());
+        assertThat(jdbc.queryForObject("select count(*) from feedback_usage_events where event_id = ?",
+                Integer.class, eventId)).isEqualTo(1);
     }
 
     private TeamFixture saveTeam() {
@@ -529,7 +794,8 @@ class SharedFeedbackControllerIntegrationTest {
     }
 
     private TeamTaskType saveTaskType(Team team, String name) {
-        TeamTaskType task = TeamTaskType.builder().team(team).name(name).successDefinition("검토 통과").build();
+        TeamTaskType task = TeamTaskType.builder().team(team).name(name).successConditions(List.of("검토 통과"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(task);
         return task;
     }
@@ -567,25 +833,47 @@ class SharedFeedbackControllerIntegrationTest {
         return conversation.getId();
     }
 
-    private void publishGuide(Feedback feedback) {
+    private SharedCase approveCase(Feedback feedback, String type, String title, String after, Instant sharedAt) {
+        var content = new Content(title, type, "승인 문제", "승인 개선 방안", new Example("승인 전 예시", after));
+        var preview = new SharePreview(feedback, content, sharedAt);
+        preview.consume(sharedAt);
+        entityManager.persist(preview);
+        var sharedCase = new SharedCase(feedback, preview, sharedAt);
+        entityManager.persist(sharedCase);
         feedback.share();
-        feedback.addToGuide();
-    }
-
-    private void setGuideDate(Feedback feedback, LocalDateTime date) {
-        jdbc.update("update feedbacks set guide_added_at = ? where id = ?", date, feedback.getId());
+        feedback.advanceShareVersion();
+        return sharedCase;
     }
 
     private ResultActions share(Long feedbackId, User user, String body) throws Exception {
         return mockMvc.perform(patch(SHARE, feedbackId)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId()))
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(user.getId()))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));
     }
 
+    private long createSharePreview(Long feedbackId, User user) throws Exception {
+        String body = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/v1/feedbacks/{feedbackId}/share-preview", feedbackId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(user.getId())))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        Number previewId = JsonPath.read(body, "$.data.previewId");
+        return previewId.longValue();
+    }
+
+    private ResultActions designateGuide(Long teamId, Long sharedCaseId, User leader, int expectedVersion)
+            throws Exception {
+        return mockMvc.perform(put("/api/v1/teams/{teamId}/guides/{sharedCaseId}", teamId, sharedCaseId)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(leader.getId()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"expectedShareVersion":%d}
+                        """.formatted(expectedVersion)));
+    }
+
     private ResultActions request(String path, Long teamId, User user, String... params) throws Exception {
         MockHttpServletRequestBuilder request = get(path, teamId)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId()));
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(user.getId()));
         for (int index = 0; index < params.length; index += 2) {
             request.param(params[index], params[index + 1]);
         }

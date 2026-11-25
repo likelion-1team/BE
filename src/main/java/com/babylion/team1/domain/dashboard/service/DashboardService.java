@@ -1,7 +1,6 @@
 package com.babylion.team1.domain.dashboard.service;
 
 import com.babylion.team1.domain.dashboard.dto.ConversationAggregate;
-import com.babylion.team1.domain.dashboard.dto.ConversationDateRange;
 import com.babylion.team1.domain.dashboard.dto.CostRow;
 import com.babylion.team1.domain.dashboard.dto.CostType;
 import com.babylion.team1.domain.dashboard.dto.DatePeriod;
@@ -9,28 +8,19 @@ import com.babylion.team1.domain.dashboard.dto.KpiCondition;
 import com.babylion.team1.domain.dashboard.dto.request.CostBreakdownRequest;
 import com.babylion.team1.domain.dashboard.dto.request.CostGroupBy;
 import com.babylion.team1.domain.dashboard.dto.request.DashboardScope;
-import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
 import com.babylion.team1.domain.dashboard.dto.request.OnboardingEffectRequest;
 import com.babylion.team1.domain.dashboard.dto.request.TaskTypeStatsRequest;
-import com.babylion.team1.domain.dashboard.dto.request.TrendMetric;
-import com.babylion.team1.domain.dashboard.dto.request.TrendRequest;
 import com.babylion.team1.domain.dashboard.dto.response.CoreMetrics;
 import com.babylion.team1.domain.dashboard.dto.response.CostBreakdownResponse;
 import com.babylion.team1.domain.dashboard.dto.response.CostItem;
 import com.babylion.team1.domain.dashboard.dto.response.CostPoint;
-import com.babylion.team1.domain.dashboard.dto.response.CoverageResponse;
 import com.babylion.team1.domain.dashboard.dto.response.DayConversationItem;
 import com.babylion.team1.domain.dashboard.dto.response.DayDetailResponse;
 import com.babylion.team1.domain.dashboard.dto.response.DayTaskTypeItem;
-import com.babylion.team1.domain.dashboard.dto.response.FilterOptionsResponse;
-import com.babylion.team1.domain.dashboard.dto.response.KpiResponse;
-import com.babylion.team1.domain.dashboard.dto.response.MetricValue;
 import com.babylion.team1.domain.dashboard.dto.response.OnboardingEffectResponse;
 import com.babylion.team1.domain.dashboard.dto.response.TaskTypeOption;
 import com.babylion.team1.domain.dashboard.dto.response.TaskTypeStatsItem;
 import com.babylion.team1.domain.dashboard.dto.response.TaskTypeStatsResponse;
-import com.babylion.team1.domain.dashboard.dto.response.TrendPoint;
-import com.babylion.team1.domain.dashboard.dto.response.TrendResponse;
 import com.babylion.team1.domain.dashboard.repository.DashboardQueryRepository;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
@@ -52,6 +42,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * v4 명세에 없는 기존 대시보드 API(온보딩 비교, 비용 구조, 교육 필요 업무, 일자 상세).
+ * conversations를 집계하며, 분석 전이거나 실패·삭제된 대화는 제외한다. v4 API는 DashboardMetricService가 맡는다.
+ */
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -68,45 +62,7 @@ public class DashboardService {
     private final DashboardQueryRepository dashboardQueryRepository;
 
     /**
-     * scope에 따라 본인 지표(ME) 또는 팀 전체 집계(TEAM)를 돌려준다. 생략하면 팀장은 TEAM, 팀원은 ME.
-     * coverage는 팀 집계일 때만 채운다.
-     * 팀이 없으면 404 TEAM_NOT_FOUND, 팀 멤버가 아니면 403 NOT_A_MEMBER, 팀원이 TEAM을 요청하면 403 LEADER_ONLY.
-     */
-    public KpiResponse getKpis(Long teamId, Long userId, KpiRequest request) {
-        DashboardContext context = loadContext(teamId, userId, request.scope());
-        DatePeriod period = context.period(request.from(), request.to());
-        DatePeriod prevPeriod = period.previous();
-        KpiCondition condition = context.condition(request.taskTypes(), request.models());
-
-        ConversationAggregate current = dashboardQueryRepository.aggregateConversations(condition, period);
-        ConversationAggregate previous = dashboardQueryRepository.aggregateConversations(condition, prevPeriod);
-        BigDecimal saving = dashboardQueryRepository.sumExpectedSavingCost(condition, period);
-        BigDecimal prevSaving = dashboardQueryRepository.sumExpectedSavingCost(condition, prevPeriod);
-        int hourlyLaborCost = context.hourlyLaborCost();
-
-        CoverageResponse coverage = context.isTeamScope()
-                ? CoverageResponse.of(
-                        current.submittedMemberCount(),
-                        teamMemberRepository.countByTeamId(teamId),
-                        current.conversationCount(),
-                        context.targetCount())
-                : null;
-
-        return KpiResponse.of(
-                period,
-                prevPeriod,
-                MetricValue.of(current.tokensPerSuccess(), previous.tokensPerSuccess(), true),
-                MetricValue.of(current.reworkRate(), previous.reworkRate(), false),
-                MetricValue.of(current.successRate(), previous.successRate(), false),
-                MetricValue.of(current.costPerSuccess(hourlyLaborCost), previous.costPerSuccess(hourlyLaborCost), true),
-                MetricValue.of(saving, prevSaving, true),
-                MetricValue.of(current.humanTimeSec(), previous.humanTimeSec(), false),
-                MetricValue.of(current.conversationCount(), previous.conversationCount(), false),
-                coverage);
-    }
-
-    /**
-     * 온보딩 시작일 전/후의 핵심 지표 3개를 비교한다. 집계 범위는 scope를 따른다(getKpis 참고).
+     * 온보딩 시작일 전/후의 핵심 지표 3개를 비교한다. 집계 범위는 scope를 따른다(loadContext 참고).
      * 전: 대상 기간 시작일 ~ 온보딩 시작일 전날 / 후: 온보딩 시작일 ~ 대상 기간 종료일.
      * 온보딩 시작일이나 대상 기간이 없으면 before·after를 null로 돌려준다(화면에서 비교 카드 숨김).
      */
@@ -126,44 +82,7 @@ public class DashboardService {
     }
 
     /**
-     * 선택한 지표의 날짜별(DAY) 또는 주별(WEEK, 월요일 시작) 추이. 집계 범위는 scope를 따른다(getKpis 참고).
-     * 대화가 없는 날(주)도 빠짐없이 채워 날짜 오름차순으로 돌려준다.
-     * 표본 부족: 대화 수 < 하루 최소 대화 수 x 그 점에 포함된 일수(DAY면 1일, WEEK면 조회 기간 안에 든 일수).
-     */
-    public TrendResponse getTrends(Long teamId, Long userId, TrendRequest request) {
-        TrendMetric metric = TrendMetric.from(request.metric());
-        DashboardContext context = loadContext(teamId, userId, request.scope());
-        DatePeriod period = context.period(request.from(), request.to());
-        KpiCondition condition = context.condition(request.taskTypes(), request.models());
-        Map<LocalDate, ConversationAggregate> daily = dashboardQueryRepository.aggregateConversationsByDate(condition, period);
-
-        int minDailyConversations = context.minDailyConversations();
-        int hourlyLaborCost = context.hourlyLaborCost();
-
-        // 점(날짜 또는 주 시작일)을 먼저 모두 만들어 두고, 날짜별 집계를 해당 점에 더한다.
-        Map<LocalDate, Integer> bucketDays = ChartBuckets.daysPerBucket(period, request.unit());
-        Map<LocalDate, ConversationAggregate> buckets = new LinkedHashMap<>();
-        bucketDays.keySet().forEach(bucket -> buckets.put(bucket, ConversationAggregate.empty()));
-        daily.forEach((date, aggregate) ->
-                buckets.merge(ChartBuckets.bucketOf(date, request.unit()), aggregate, ConversationAggregate::plus));
-
-        List<TrendPoint> points = buckets.entrySet().stream()
-                .map(entry -> {
-                    ConversationAggregate aggregate = entry.getValue();
-                    long threshold = (long) minDailyConversations * bucketDays.get(entry.getKey());
-                    return new TrendPoint(
-                            entry.getKey(),
-                            metric.calculate(aggregate, hourlyLaborCost),
-                            aggregate.conversationCount(),
-                            aggregate.conversationCount() < threshold);
-                })
-                .toList();
-
-        return TrendResponse.of(metric, context.onboardingStartDate(), points);
-    }
-
-    /**
-     * 기간별 비용 구조(누적 막대 차트용). 집계 범위는 scope를 따른다(getKpis 참고).
+     * 기간별 비용 구조(누적 막대 차트용). 집계 범위는 scope를 따른다(loadContext 참고).
      * COST_TYPE은 호출비·검토비·수습비로 나누고, MODEL·TASK_TYPE은 대화별 총비용(호출+검토+수습)을 키별로 합산한다.
      * 비용은 반올림 전 정밀도로 합산한 뒤 점·키마다 원 단위로 반올림한다. 대화가 없는 날(주)도 채워 날짜 오름차순.
      */
@@ -179,8 +98,8 @@ public class DashboardService {
 
         // 점(날짜 또는 주 시작일)을 먼저 모두 만들어 두고, 집계 행을 해당 점의 키별로 더한다.
         Map<LocalDate, Map<String, BigDecimal>> buckets = new LinkedHashMap<>();
-        ChartBuckets.daysPerBucket(period, request.unit())
-                .keySet().forEach(bucket -> buckets.put(bucket, emptyCostItems(groupBy)));
+        ChartBuckets.bucketsIn(period, request.unit())
+                .forEach(bucket -> buckets.put(bucket, emptyCostItems(groupBy)));
         for (CostRow row : dashboardQueryRepository.aggregateCostsByDate(condition, period, groupBy)) {
             Map<String, BigDecimal> items = buckets.get(ChartBuckets.bucketOf(row.date(), request.unit()));
             if (groupBy == CostGroupBy.COST_TYPE) {
@@ -226,22 +145,6 @@ public class DashboardService {
             return CoreMetrics.from(ConversationAggregate.empty());
         }
         return CoreMetrics.from(dashboardQueryRepository.aggregateConversations(condition, new DatePeriod(from, to)));
-    }
-
-    /**
-     * 대시보드 필터 옵션. 팀원이면 본인 대화, 팀장이면 팀 전체 대화 기준.
-     * 대상 기간과 상관없이 저장된 대화 전체에서 뽑는다.
-     */
-    public FilterOptionsResponse getFilterOptions(Long teamId, Long userId) {
-        // scope 생략과 같다: 팀장은 팀 전체(null), 팀원은 본인
-        Long scopeUserId = resolveScopeUserId(getMember(teamId, userId), userId, null);
-
-        ConversationDateRange dateRange = dashboardQueryRepository.findConversationDateRange(teamId, scopeUserId);
-        return new FilterOptionsResponse(
-                dashboardQueryRepository.findConversationTaskTypes(teamId, scopeUserId),
-                dashboardQueryRepository.findConversationModels(teamId, scopeUserId),
-                dateRange.first(),
-                dateRange.last());
     }
 
     /**
@@ -307,6 +210,7 @@ public class DashboardService {
 
     /**
      * 대시보드 조회의 공통 준비: 요청자 검증 → 집계 범위 결정 → 팀 설정 조회.
+     * scope에 따라 본인(ME) 또는 팀 전체(TEAM)를 집계하며, 생략하면 팀장은 TEAM, 팀원은 ME다.
      * 팀이 없으면 404 TEAM_NOT_FOUND, 팀 멤버가 아니면 403 NOT_A_MEMBER, 팀원이 TEAM을 요청하면 403 LEADER_ONLY.
      */
     private DashboardContext loadContext(Long teamId, Long userId, DashboardScope scope) {

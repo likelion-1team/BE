@@ -1,65 +1,64 @@
 package com.babylion.team1.domain.team.service;
 
-import com.babylion.team1.domain.feedback.dto.request.MyFeedbackSort;
 import com.babylion.team1.domain.feedback.dto.response.GuideAddResponse;
-import com.babylion.team1.domain.feedback.dto.response.GuidesResponse;
 import com.babylion.team1.domain.feedback.dto.response.MyFeedbackListResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
 import com.babylion.team1.domain.feedback.entity.Feedback;
 import com.babylion.team1.domain.feedback.entity.FeedbackType;
+import com.babylion.team1.domain.feedback.repository.FeedbackEvidenceRepository;
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository;
-import com.babylion.team1.domain.feedback.repository.FeedbackRepository.MyFeedbackRow;
+import com.babylion.team1.domain.feedback.repository.GuideRepository;
+import com.babylion.team1.domain.feedback.repository.SharedCaseRepository;
+import com.babylion.team1.domain.feedback.entity.SharedCase;
+import com.babylion.team1.domain.feedback.entity.Guide;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
-import com.babylion.team1.domain.team.dto.request.TeamSettingsUpdateRequest;
-import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
+import com.babylion.team1.domain.team.dto.response.MyTeamsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
-import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
-import com.babylion.team1.domain.team.dto.response.TeamSettingsResponse;
-import com.babylion.team1.domain.team.dto.response.TeamSettingsUpdateResponse;
+import com.babylion.team1.domain.team.dto.response.TeamMembersResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
+import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse.Status;
+import com.babylion.team1.global.policy.ServerPolicy;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import com.babylion.team1.domain.team.entity.Team;
+import com.babylion.team1.domain.team.entity.TeamGoal;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
-import com.babylion.team1.domain.team.entity.TeamTaskType;
+import com.babylion.team1.domain.team.repository.TeamGoalRepository;
 import com.babylion.team1.domain.team.repository.TeamMemberRepository;
 import com.babylion.team1.domain.team.repository.TeamRepository;
 import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
-import com.babylion.team1.domain.team.repository.TeamTaskTypeRepository;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
+import java.time.Instant;
 import java.time.LocalDate;
-import java.time.format.DateTimeParseException;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Objects;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
 public class TeamService {
 
-    private static final int FEEDBACK_DAYS_PER_PAGE = 20;
-    private static final Comparator<MyFeedbackRow> LATEST_FEEDBACK_FIRST =
-            Comparator.comparing(MyFeedbackRow::createdAt).thenComparing(MyFeedbackRow::feedbackId).reversed();
+    private static final int MAX_TEAM_PAGE_SIZE = 100;
 
     private final UserRepository userRepository;
     private final TeamRepository teamRepository;
     private final TeamMemberRepository teamMemberRepository;
+    private final TeamGoalRepository teamGoalRepository;
     private final TeamSettingsRepository teamSettingsRepository;
-    private final TeamTaskTypeRepository teamTaskTypeRepository;
     private final FeedbackRepository feedbackRepository;
+    private final FeedbackEvidenceRepository feedbackEvidenceRepository;
+    private final SharedCaseRepository sharedCases;
+    private final GuideRepository guides;
 
     @Transactional
     public TeamCreateResponse createTeam(Long userId, TeamCreateRequest request) {
@@ -70,24 +69,25 @@ public class TeamService {
                 .description(request.description())
                 .createdBy(creator)
                 .build());
-        teamMemberRepository.save(TeamMember.leader(team, creator));
+        TeamMember leader = teamMemberRepository.save(TeamMember.leader(team, creator));
         teamSettingsRepository.save(TeamSettings.createDefault(team));
-        return new TeamCreateResponse(team.getId());
+        teamGoalRepository.save(TeamGoal.createDefault(team));
+        return new TeamCreateResponse(team.getId(), team.getName(), team.getDescription(), leader.getRole());
     }
 
     @Transactional(readOnly = true)
-    public List<MyTeamResponse> getMyTeams(Long userId) {
-        return teamMemberRepository.findMyTeams(userId);
+    public MyTeamsResponse getMyTeams(Long userId, int page, int size) {
+        var teams = teamMemberRepository.findMyTeams(userId, teamPageRequest(page, size));
+        return new MyTeamsResponse(teams.getContent(), page, size, teams.getTotalElements());
     }
 
     @Transactional
     public TeamMemberAddResponse addMember(Long teamId, Long requesterId, TeamMemberAddRequest request) {
-        Team team = findTeam(teamId);
-        requireTeamLeader(teamId, requesterId);
+        TeamMember requester = requireMembershipManager(teamId, requesterId);
 
         User user = userRepository.findByEmail(request.email())
                 .orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND, "가입되지 않은 이메일입니다."));
-        TeamMember membership = TeamMember.member(team, user);
+        TeamMember membership = TeamMember.member(requester.getTeam(), user);
         try {
             teamMemberRepository.saveAndFlush(membership);
         } catch (DataIntegrityViolationException exception) {
@@ -97,188 +97,125 @@ public class TeamService {
             throw exception;
         }
 
-        return new TeamMemberAddResponse(user.getId(), user.getName(), membership.getRole());
+        return new TeamMemberAddResponse(user.getId(), user.getName(), user.getEmail(), membership.getRole());
     }
 
     @Transactional(readOnly = true)
-    public List<TeamMemberListResponse> getTeamMembers(Long teamId, Long userId) {
-        findTeam(teamId);
-        requireTeamLeader(teamId, userId);
-        return teamMemberRepository.findTeamMembersWithSubmission(teamId);
+    public TeamMembersResponse getTeamMembers(Long teamId, Long userId, int page, int size) {
+        requireMembershipManager(teamId, userId);
+        var members = teamMemberRepository.findTeamMembersWithSubmission(teamId, teamPageRequest(page, size));
+        return new TeamMembersResponse(members.getContent(), page, size, members.getTotalElements());
     }
 
     @Transactional(readOnly = true)
     public TeamSubmissionResponse getTeamSubmissions(Long teamId, Long userId) {
-        findTeam(teamId);
-        teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
-                .filter(TeamMember::isLeader)
-                .orElseThrow(() -> new CustomException(ErrorCode.LEADER_ONLY));
-        return teamMemberRepository.findTeamSubmissionSummary(teamId);
+        var membership = teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        if (!membership.isLeader()) {
+            throw new CustomException(ErrorCode.ROLE_FORBIDDEN);
+        }
+        var summary = teamMemberRepository.findTeamSubmissionSummary(teamId);
+        if (summary.contributors() < ServerPolicy.MIN_TEAM_CONTRIBUTORS) {
+            return new TeamSubmissionResponse(summary.settingsVersion(), summary.submittedMembers(),
+                    summary.totalMembers(), null, null, null, Status.SUPPRESSED);
+        }
+        Integer targetCount = summary.targetCount();
+        BigDecimal coverageRatio = targetCount == null || targetCount <= 0 ? null
+                : BigDecimal.valueOf(summary.analyzedConversations())
+                        .divide(BigDecimal.valueOf(targetCount), 8, RoundingMode.HALF_UP).stripTrailingZeros();
+        return new TeamSubmissionResponse(summary.settingsVersion(), summary.submittedMembers(),
+                summary.totalMembers(), summary.analyzedConversations(), targetCount, coverageRatio, Status.AVAILABLE);
     }
 
     @Transactional(readOnly = true)
     public MyFeedbackListResponse getMyFeedbacks(Long teamId, Long userId, LocalDate from, LocalDate to,
-                                                  List<String> types, MyFeedbackSort sort, int page) {
-        requireTeamMember(teamId, userId);
-        if (page < 0 || (from != null && to != null && from.isAfter(to))) {
-            throw new CustomException(ErrorCode.INVALID_REQUEST);
+                                                  String type, String sort, int page, int size) {
+        teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        if (page < 1 || size < 1 || size > 100 || (from != null && to != null && from.isAfter(to))
+                || !("LATEST".equals(sort) || "FREQUENCY".equals(sort))) {
+            throw new CustomException(ErrorCode.VALIDATION_FAILED);
         }
-        if (page > Integer.MAX_VALUE / FEEDBACK_DAYS_PER_PAGE) {
-            return new MyFeedbackListResponse(List.of());
-        }
-
-        List<String> typeValues = types == null ? List.of() : types.stream()
-                .flatMap(value -> Arrays.stream(value.split(",")))
-                .map(String::strip)
-                .filter(value -> !value.isEmpty())
-                .map(FeedbackType::displayName)
-                .flatMap(value -> Stream.of(value, FeedbackType.alternateValue(value)))
-                .filter(Objects::nonNull)
-                .distinct()
-                .toList();
-        boolean allTypes = typeValues.isEmpty();
-        List<LocalDate> dates = feedbackRepository.findMyFeedbackDates(teamId, userId, from, to, allTypes,
-                typeValues, PageRequest.of(page, FEEDBACK_DAYS_PER_PAGE));
-        if (dates.isEmpty()) {
-            return new MyFeedbackListResponse(List.of());
-        }
-
-        Comparator<MyFeedbackRow> itemOrder = switch (sort) {
-            case LATEST -> LATEST_FEEDBACK_FIRST;
-            case SAVING -> Comparator.comparing(MyFeedbackRow::savingTokens).reversed()
-                    .thenComparing(LATEST_FEEDBACK_FIRST);
-            case FREQUENCY -> Comparator.comparing(MyFeedbackRow::occurrenceCount).reversed()
-                    .thenComparing(LATEST_FEEDBACK_FIRST);
-        };
-        var rowsByDate = feedbackRepository.findMyFeedbackRows(teamId, userId, allTypes, typeValues, dates)
-                .stream()
-                .collect(Collectors.groupingBy(MyFeedbackRow::date));
-        return new MyFeedbackListResponse(dates.stream()
-                .map(date -> new MyFeedbackListResponse.Day(date, rowsByDate.getOrDefault(date, List.of()).stream()
-                        .sorted(itemOrder)
-                        .map(TeamService::toMyFeedbackItem)
-                        .toList()))
-                .toList());
-    }
-
-    private static MyFeedbackListResponse.Item toMyFeedbackItem(MyFeedbackRow row) {
-        return new MyFeedbackListResponse.Item(row.feedbackId(), FeedbackType.displayName(row.type()),
-                row.title(), row.occurrenceCount(),
-                new MyFeedbackListResponse.ExpectedSaving(row.savingTokens(), row.savingCost(), row.savingTurns()),
-                row.myReaction(), row.isShared());
+        var rows = feedbackRepository.findVerifiedFeedback(teamId, userId, from, to, type,
+                FeedbackType.alternateValue(type), "FREQUENCY".equals(sort), PageRequest.of(page - 1, size));
+        return new MyFeedbackListResponse(rows.stream().map(row -> new MyFeedbackListResponse.Item(
+                row.getFeedbackId(), row.getItemId(), row.getConversationId(), row.getConversationVersionId(),
+                row.getType(), row.getTitle(),
+                row.getOccurrenceCount(), row.getCreatedAt().atZone(java.time.ZoneId.systemDefault())
+                        .withZoneSameInstant(java.time.ZoneId.of("Asia/Seoul")).toOffsetDateTime(),
+                row.getReaction(), row.getSharingStatus(),
+                com.babylion.team1.domain.feedback.dto.response.FeedbackDetailResponse.ExpectedSaving.NOT_MEASURED))
+                .toList(), page, size, rows.getTotalElements());
     }
 
     @Transactional(readOnly = true)
-    public SharedCasesResponse getSharedCases(Long teamId, Long userId, Long taskTypeId, String type) {
-        findTeam(teamId);
-        requireTeamLeader(teamId, userId);
-        return SharedCasesResponse.from(feedbackRepository.findSharedCases(
-                teamId, taskTypeId, type, FeedbackType.alternateValue(type)));
+    public SharedCasesResponse getSharedCases(Long teamId, Long userId, String type, int page, int size) {
+        requireMembershipManager(teamId, userId);
+        return SharedCasesResponse.from(sharedCases.findPublicCases(teamId, type, FeedbackType.alternateValue(type),
+                false, teamPageRequest(page, size)));
     }
 
     @Transactional(readOnly = true)
-    public GuidesResponse getGuides(Long teamId, Long userId, String type) {
-        findTeam(teamId);
-        requireTeamMember(teamId, userId);
-        return GuidesResponse.from(feedbackRepository.findGuides(teamId, type, FeedbackType.alternateValue(type)));
+    public SharedCasesResponse getGuides(Long teamId, Long userId, String type, int page, int size) {
+        teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        return SharedCasesResponse.from(sharedCases.findPublicCases(teamId, type, FeedbackType.alternateValue(type),
+                true, teamPageRequest(page, size)));
     }
 
-    @Transactional
-    public GuideAddResponse addGuide(Long feedbackId, Long userId) {
-        Feedback feedback = lockFeedback(feedbackId);
-        requireTeamLeader(feedback.getTeam().getId(), userId);
-        feedback.addToGuide();
-        return new GuideAddResponse(true, feedback.guideAddedAtInKst());
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public GuideAddResponse addGuide(Long teamId, Long sharedCaseId, Long userId, int expectedShareVersion) {
+        requireMembershipManager(teamId, userId);
+        Feedback feedback = lockSharedCaseFeedback(teamId, sharedCaseId);
+        SharedCase sharedCase = sharedCases.findByIdAndTeamId(sharedCaseId, teamId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        if (sharedCase.getStatus() == SharedCase.Status.REVOKED) {
+            throw new CustomException(ErrorCode.SHARING_REVOKED);
+        }
+        if (sharedCase.getStatus() != SharedCase.Status.ACTIVE
+                || feedbackEvidenceRepository.hasDeletedOriginal(feedback.getId())) {
+            throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        if (feedback.getShareVersion() != expectedShareVersion) {
+            throw new CustomException(ErrorCode.VERSION_CONFLICT);
+        }
+        if (guides.findBySharedCaseId(sharedCaseId).isEmpty()) {
+            guides.save(new Guide(sharedCase, userRepository.getReferenceById(userId), Instant.now()));
+        }
+        return new GuideAddResponse(sharedCaseId, true);
     }
 
-    @Transactional
-    public void removeGuide(Long feedbackId, Long userId) {
-        Feedback feedback = lockFeedback(feedbackId);
-        teamMemberRepository.findByTeamIdAndUserId(feedback.getTeam().getId(), userId)
-                .filter(TeamMember::isLeader)
-                .orElseThrow(() -> new CustomException(ErrorCode.LEADER_ONLY));
-        feedback.removeFromGuide();
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void removeGuide(Long teamId, Long sharedCaseId, Long userId) {
+        requireMembershipManager(teamId, userId);
+        lockSharedCaseFeedback(teamId, sharedCaseId);
+        sharedCases.findByIdAndTeamId(sharedCaseId, teamId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        guides.deleteBySharedCaseId(sharedCaseId);
     }
 
-    private Feedback lockFeedback(Long feedbackId) {
+    private Feedback lockSharedCaseFeedback(Long teamId, Long sharedCaseId) {
+        Long feedbackId = sharedCases.findFeedbackId(sharedCaseId, teamId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        // Sharing, guide assignment, and guide removal serialize on the same feedback row.
         return feedbackRepository.findByIdForUpdate(feedbackId)
-                .orElseThrow(() -> new CustomException(ErrorCode.FEEDBACK_NOT_FOUND));
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
     }
 
-    @Transactional(readOnly = true)
-    public TeamSettingsResponse getSettings(Long teamId, Long userId) {
-        Team team = findTeam(teamId);
-        requireTeamMember(teamId, userId);
-        TeamSettings settings = teamSettingsRepository.findByTeamId(teamId)
-                .orElseGet(() -> TeamSettings.createDefault(team));
-        return TeamSettingsResponse.from(settings, teamTaskTypeRepository.findByTeamIdAndIsActiveTrueOrderById(teamId));
+    private TeamMember requireMembershipManager(Long teamId, Long userId) {
+        TeamMember member = teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        if (!member.isLeader()) {
+            throw new CustomException(ErrorCode.ROLE_FORBIDDEN);
+        }
+        return member;
     }
 
-    @Transactional
-    public TeamSettingsUpdateResponse updateSettings(Long teamId, Long userId, TeamSettingsUpdateRequest request) {
-        // Serialize settings writes for this team, including activation and first-time creation.
-        Team team = teamRepository.findByIdForUpdate(teamId)
-                .orElseThrow(() -> new CustomException(ErrorCode.TEAM_NOT_FOUND));
-        requireTeamLeader(teamId, userId);
-
-        LocalDate targetFrom = parseTargetDate(request.targetFrom());
-        LocalDate targetTo = parseTargetDate(request.targetTo());
-        LocalDate onboardingStartDate = parseTargetDate(request.onboardingStartDate());
-        if (targetFrom.isAfter(targetTo)
-                || onboardingStartDate.isBefore(targetFrom) || onboardingStartDate.isAfter(targetTo)) {
+    private PageRequest teamPageRequest(int page, int size) {
+        if (page < 1 || size < 1 || size > MAX_TEAM_PAGE_SIZE || (long) (page - 1) * size > Integer.MAX_VALUE) {
             throw new CustomException(ErrorCode.INVALID_REQUEST);
         }
-
-        activateTaskType(team, request.taskTypes().get(0));
-        TeamSettings settings = teamSettingsRepository.findByTeamId(teamId)
-                .orElseGet(() -> TeamSettings.createDefault(team));
-        Integer targetCount = request.targetCount() == null ? null : request.targetCount().intValueExact();
-        settings.updateTarget(targetFrom, targetTo, onboardingStartDate, targetCount);
-        teamSettingsRepository.save(settings);
-        return new TeamSettingsUpdateResponse(settings.updatedAtInKst());
-    }
-
-    private void activateTaskType(Team team, TeamSettingsUpdateRequest.TaskType request) {
-        Long teamId = team.getId();
-        TeamTaskType selected = teamTaskTypeRepository.findByTeamIdAndName(teamId, request.name())
-                .orElseGet(() -> TeamTaskType.builder()
-                        .team(team)
-                        .name(request.name())
-                        .successDefinition(request.successDefinition())
-                        .build());
-        teamTaskTypeRepository.findByTeamIdAndIsActiveTrueOrderById(teamId).stream()
-                .filter(active -> !Objects.equals(active.getId(), selected.getId()))
-                .forEach(TeamTaskType::deactivate);
-        selected.update(request.name(), request.successDefinition());
-        selected.activate();
-        teamTaskTypeRepository.save(selected);
-    }
-
-    private LocalDate parseTargetDate(String value) {
-        if (value.length() != 10 || value.startsWith("0000-")) {
-            throw new CustomException(ErrorCode.INVALID_REQUEST);
-        }
-        try {
-            return LocalDate.parse(value);
-        } catch (DateTimeParseException exception) {
-            throw new CustomException(ErrorCode.INVALID_REQUEST);
-        }
-    }
-
-    private Team findTeam(Long teamId) {
-        return teamRepository.findById(teamId)
-                .orElseThrow(() -> new CustomException(ErrorCode.TEAM_NOT_FOUND));
-    }
-
-    private TeamMember requireTeamMember(Long teamId, Long userId) {
-        return teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
-                .orElseThrow(() -> new CustomException(ErrorCode.NOT_A_MEMBER));
-    }
-
-    private void requireTeamLeader(Long teamId, Long userId) {
-        if (!requireTeamMember(teamId, userId).isLeader()) {
-            throw new CustomException(ErrorCode.LEADER_ONLY);
-        }
+        return PageRequest.of(page - 1, size);
     }
 
     private boolean isDuplicateMembership(DataIntegrityViolationException exception) {

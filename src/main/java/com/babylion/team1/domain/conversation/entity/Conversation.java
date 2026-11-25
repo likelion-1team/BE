@@ -18,7 +18,7 @@ import org.hibernate.annotations.ColumnDefault;
 @Entity
 @Table(
 	name = "conversations",
-	uniqueConstraints = @UniqueConstraint(name = "uk_conversations_team_external", columnNames = {"team_id", "external_id"}),
+	uniqueConstraints = @UniqueConstraint(name = "uk_conversations_owner_external", columnNames = {"team_id", "user_id", "external_id"}),
 	indexes = {
 		// 팀장 집계용
 		@Index(name = "idx_conversations_team_task_date", columnList = "team_id, task_type_id, conversation_date"),
@@ -33,6 +33,10 @@ public class Conversation {
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
 	private Long id;
+
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "current_version_id")
+	private ConversationVersion currentVersion;
 
 	@ManyToOne(fetch = FetchType.LAZY)
 	@JoinColumn(name = "team_id", nullable = false)
@@ -120,6 +124,10 @@ public class Conversation {
 		if (reworkTimeSec != null) {
 			this.reworkTimeSec = reworkTimeSec;
 		}
+	}
+
+	public void promote(ConversationVersion version) {
+		currentVersion = version;
 	}
 
 	public void recordAnalysis(String model, int turnCount, int estimatedTokens, BigDecimal estimatedCost,

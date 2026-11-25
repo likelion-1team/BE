@@ -9,7 +9,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
-import org.springframework.validation.BindingResult;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -40,13 +39,13 @@ public class GlobalExceptionHandler {
         } else {
             log.warn("[CustomException] {} - {}", errorCode.getCode(), e.getMessage());
         }
-        return toResponse(errorCode, e.getMessage(), null);
+        return toResponse(errorCode, e.getMessage(), e.getErrors());
     }
 
     /** @Valid @RequestBody 검증 실패 */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleMethodArgumentNotValid(MethodArgumentNotValidException e) {
-        List<FieldErrorResponse> errors = toFieldErrors(e.getBindingResult());
+        List<FieldErrorResponse> errors = FieldErrorResponse.listFrom(e.getBindingResult());
         log.warn("[Validation] {}", errors);
         return toResponse(ErrorCode.INVALID_REQUEST, errors);
     }
@@ -54,7 +53,7 @@ public class GlobalExceptionHandler {
     /** @ModelAttribute 바인딩·검증 실패 */
     @ExceptionHandler(BindException.class)
     public ResponseEntity<ApiResponse<Void>> handleBindException(BindException e) {
-        List<FieldErrorResponse> errors = toFieldErrors(e.getBindingResult());
+        List<FieldErrorResponse> errors = FieldErrorResponse.listFrom(e.getBindingResult());
         log.warn("[Validation] {}", errors);
         return toResponse(ErrorCode.INVALID_REQUEST, errors);
     }
@@ -111,7 +110,7 @@ public class GlobalExceptionHandler {
     /** 서블릿에서 요청 크기를 제한하면 컨트롤러에 진입하기 전에 발생한다. */
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ApiResponse<Void>> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException e) {
-        return toResponse(ErrorCode.FILE_TOO_LARGE, null);
+        return toResponse(ErrorCode.UPLOAD_TOO_LARGE, null);
     }
 
     @ExceptionHandler(MultipartException.class)
@@ -155,12 +154,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(errorCode.getStatus())
                 .body(ApiResponse.error(errorCode.getCode(), message, errors));
-    }
-
-    private List<FieldErrorResponse> toFieldErrors(BindingResult bindingResult) {
-        return bindingResult.getFieldErrors().stream()
-                .map(fieldError -> new FieldErrorResponse(fieldError.getField(), fieldError.getDefaultMessage()))
-                .toList();
     }
 
     private String lastPathNode(ConstraintViolation<?> violation) {

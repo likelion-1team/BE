@@ -1,16 +1,17 @@
 package com.babylion.team1.domain.feedback.repository;
 
 import com.babylion.team1.domain.feedback.entity.Feedback;
-import com.babylion.team1.domain.feedback.entity.ReactionType;
 import jakarta.persistence.LockModeType;
-import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -22,62 +23,58 @@ public interface FeedbackRepository extends JpaRepository<Feedback, Long> {
     @Query("select f from Feedback f where f.id = :feedbackId")
     Optional<Feedback> findByIdForUpdate(@Param("feedbackId") Long feedbackId);
 
-    String MY_FEEDBACK_SCOPE = """
-            where f.team.id = :teamId and f.user.id = :userId
-              and (:allTypes = true or f.type in :types)
+    String VERIFIED_FEEDBACK = """
+            from feedbacks f
+            join feedback_evidences e on e.feedback_id = f.id
+            join conversations c on c.id = e.conversation_id
+            left join analyses a on a.upload_id = f.upload_id
+            left join conversation_versions v on v.conversation_id = c.id and exists (
+                select 1 from analysis_items i where i.analysis_id = a.id and i.version_id = v.id)
+            left join analysis_items i on i.analysis_id = a.id and i.version_id = v.id
+            left join conversation_versions current_v on current_v.id = c.current_version_id
+            join messages m on m.conversation_id = c.id and m.version_id <=> v.id
+                and json_contains(e.turn_indexes, cast(m.idx as json))
+            left join feedback_reactions r on r.feedback_id = f.id and r.user_id = f.user_id
+            where f.team_id = :teamId and f.user_id = :userId
+              and (:type is null or f.type = :type or f.type = :alternateType)
+              and (case when v.id is null then current_v.deleted_at else v.deleted_at end) is null
+              and (:fromDate is null or coalesce(v.conversation_date, c.conversation_date) >= :fromDate)
+              and (:toDate is null or coalesce(v.conversation_date, c.conversation_date) <= :toDate)
             """;
 
-    @Query("""
-            select distinct f.feedbackDate from Feedback f
-            """ + MY_FEEDBACK_SCOPE + """
-              and (:fromDate is null or f.feedbackDate >= :fromDate)
-              and (:toDate is null or f.feedbackDate <= :toDate)
-            order by f.feedbackDate desc
-            """)
-    List<LocalDate> findMyFeedbackDates(Long teamId, Long userId, LocalDate fromDate,
-                                        LocalDate toDate, boolean allTypes, List<String> types,
-                                        Pageable pageable);
+    @Query(value = """
+            select f.id as feedbackId, min(i.id) as itemId, min(c.id) as conversationId,
+                min(v.id) as conversationVersionId,
+                f.type as type, f.title as title, count(distinct m.id) as occurrenceCount,
+                f.created_at as createdAt, r.reaction as reaction,
+                case when exists (select 1 from shared_cases sc where sc.feedback_id = f.id and sc.status = 'ACTIVE')
+                    then 'SHARED' else 'NOT_SHARED' end as sharingStatus
+            """ + VERIFIED_FEEDBACK + """
+            group by f.id, f.type, f.title, f.created_at, r.reaction
+            order by case when :frequency then count(distinct m.id) else 0 end desc, f.created_at desc, f.id desc
+            """, countQuery = "select count(distinct f.id) " + VERIFIED_FEEDBACK
+                    + " and (:frequency = true or :frequency = false)", nativeQuery = true)
+    Page<MyFeedbackRow> findVerifiedFeedback(Long teamId, Long userId,
+            LocalDate fromDate, LocalDate toDate, String type, String alternateType, boolean frequency, Pageable pageable);
 
-    @Query("""
-            select new com.babylion.team1.domain.feedback.repository.FeedbackRepository$MyFeedbackRow(
-                f.feedbackDate, f.id, f.type, f.title, f.occurrenceCount,
-                f.expectedSavingTokens, f.expectedSavingCost, f.expectedSavingTurns,
-                reaction.reaction, f.isShared, f.createdAt)
-            from Feedback f
-            left join FeedbackReaction reaction on reaction.feedback = f and reaction.user.id = :userId
-            """ + MY_FEEDBACK_SCOPE + """
-              and f.feedbackDate in :dates
-            """)
-    List<MyFeedbackRow> findMyFeedbackRows(Long teamId, Long userId, boolean allTypes,
-                                           List<String> types, List<LocalDate> dates);
-
-    record MyFeedbackRow(LocalDate date, Long feedbackId, String type, String title,
-                         Integer occurrenceCount, Integer savingTokens, BigDecimal savingCost,
-                         Integer savingTurns, ReactionType myReaction, Boolean isShared,
-                         LocalDateTime createdAt) {
+    interface MyFeedbackRow {
+        Long getFeedbackId();
+        Long getItemId();
+        Long getConversationId();
+        Long getConversationVersionId();
+        String getType();
+        String getTitle();
+        long getOccurrenceCount();
+        LocalDateTime getCreatedAt();
+        String getReaction();
+        String getSharingStatus();
     }
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select f from Feedback f where f.id in :feedbackIds order by f.id")
+    List<Feedback> findAllByIdForUpdate(Collection<Long> feedbackIds);
 
-    @Query("""
-            select f from Feedback f
-            join fetch f.taskType task
-            where f.team.id = :teamId and f.isShared = true
-              and (:taskTypeId is null or task.id = :taskTypeId)
-              and (:type is null or f.type = :type or f.type = :alternateType)
-            order by f.sharedAt desc, f.id desc
-            """)
-    List<Feedback> findSharedCases(@Param("teamId") Long teamId,
-                                   @Param("taskTypeId") Long taskTypeId,
-                                   @Param("type") String type,
-                                   @Param("alternateType") String alternateType);
-
-    @Query("""
-            select f from Feedback f
-            where f.team.id = :teamId and f.isShared = true and f.isGuide = true
-              and (:type is null or f.type = :type or f.type = :alternateType)
-            order by f.guideAddedAt desc, f.id desc
-            """)
-    List<Feedback> findGuides(@Param("teamId") Long teamId,
-                              @Param("type") String type,
-                              @Param("alternateType") String alternateType);
+    @Modifying
+    @Query("delete from Feedback f where f.id in :feedbackIds")
+    void deleteByIds(Collection<Long> feedbackIds);
 }

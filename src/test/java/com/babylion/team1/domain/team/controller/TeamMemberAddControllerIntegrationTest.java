@@ -15,7 +15,7 @@ import com.babylion.team1.domain.team.repository.TeamMemberRepository;
 import com.babylion.team1.domain.team.repository.TeamRepository;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import com.jayway.jsonpath.JsonPath;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -53,7 +53,7 @@ class TeamMemberAddControllerIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
     @Autowired
-    private JwtProvider jwtProvider;
+    private TestAccessTokens accessTokens;
     @Autowired
     private TeamRepository teamRepository;
     @Autowired
@@ -78,8 +78,8 @@ class TeamMemberAddControllerIntegrationTest {
                 .andExpect(jsonPath("$.message").value("팀원 추가 성공"))
                 .andExpect(jsonPath("$.data.userId").value(invitee.getId()))
                 .andExpect(jsonPath("$.data.name").value(invitee.getName()))
+                .andExpect(jsonPath("$.data.email").value(invitee.getEmail()))
                 .andExpect(jsonPath("$.data.role").value("MEMBER"))
-                .andExpect(jsonPath("$.data.email").doesNotExist())
                 .andExpect(jsonPath("$.errors").value(nullValue()))
                 .andExpect(jsonPath("$.timestamp", endsWith("+09:00")));
 
@@ -91,20 +91,27 @@ class TeamMemberAddControllerIntegrationTest {
     }
 
     @Test
-    void leaderOfAnotherTeamCannotAddAnyoneToDestinationTeam() throws Exception {
+    void permissionsDependOnTheRoleInTheDestinationTeam() throws Exception {
         User requester = saveUser("Other team leader");
         saveTeam("Requester team", requester);
         Team destination = saveTeam("Destination team", saveUser("Destination leader"));
         User invitee = saveUser("Invited user");
+        String unregisteredEmail = UUID.randomUUID() + "@example.com";
 
         addMember(destination, requester, invitee.getEmail())
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        addMember(destination, requester, unregisteredEmail)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
 
         teamMemberRepository.save(TeamMember.member(destination, requester));
         addMember(destination, requester, invitee.getEmail())
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
+        addMember(destination, requester, unregisteredEmail)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
 
         assertThat(teamMemberRepository.findByTeamIdAndUserId(destination.getId(), invitee.getId())).isEmpty();
     }
@@ -116,7 +123,7 @@ class TeamMemberAddControllerIntegrationTest {
         mockMvc.perform(request(Long.MAX_VALUE, emailBody(requester.getEmail()))
                         .header(HttpHeaders.AUTHORIZATION, bearer(requester)))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("TEAM_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
 
     @Test
@@ -169,7 +176,7 @@ class TeamMemberAddControllerIntegrationTest {
         String body = emailBody("member@example.com");
         mockMvc.perform(request(1L, body))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
         mockMvc.perform(request(1L, body).header(HttpHeaders.AUTHORIZATION, "Bearer invalid"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
@@ -246,7 +253,7 @@ class TeamMemberAddControllerIntegrationTest {
     }
 
     private String bearer(User user) {
-        return "Bearer " + jwtProvider.createAccessToken(user.getId());
+        return "Bearer " + accessTokens.create(user.getId());
     }
 
     private record ConcurrentFixture(Team team, User leader, User invitee) {}

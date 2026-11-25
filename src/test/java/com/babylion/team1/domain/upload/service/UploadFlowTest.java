@@ -19,6 +19,8 @@ import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
 import com.babylion.team1.domain.upload.controller.UploadController;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.upload.entity.UploadStatus;
+import com.babylion.team1.domain.upload.entity.UploadCandidate;
+import com.babylion.team1.domain.upload.repository.UploadCandidateRepository;
 import com.babylion.team1.domain.upload.repository.UploadRepository;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.global.exception.GlobalExceptionHandler;
@@ -75,6 +77,7 @@ class UploadFlowTest {
     private final TeamSettingsRepository settingsRepository = mock(TeamSettingsRepository.class);
     private final ConversationRepository conversations = mock(ConversationRepository.class);
     private final UploadRepository uploads = mock(UploadRepository.class);
+    private final UploadCandidateRepository candidates = mock(UploadCandidateRepository.class);
     private final Team team = mock(Team.class);
     private final User user = mock(User.class);
     private TeamSettings settings;
@@ -84,6 +87,7 @@ class UploadFlowTest {
     @BeforeEach
     void setUp() {
         settings = TeamSettings.createDefault(team);
+        ReflectionTestUtils.setField(settings, "version", 1);
         settings.updateTarget(DAY, DAY, null, null);
         when(members.findByTeamIdAndUserId(TEAM_ID, USER_ID))
                 .thenReturn(Optional.of(TeamMember.member(team, user)));
@@ -91,11 +95,13 @@ class UploadFlowTest {
         when(uploads.saveAndFlush(any(Upload.class))).thenAnswer(invocation -> {
             Upload upload = invocation.getArgument(0);
             ReflectionTestUtils.setField(upload, "id", UPLOAD_ID);
+            ReflectionTestUtils.setField(upload, "uploadedAt", DAY.atStartOfDay());
             return upload;
         });
 
         storage = new UploadFileStorage(directory.toString());
         UploadService service = new UploadService(members, settingsRepository, conversations, uploads,
+                candidates,
                 new ChatGptExportReader(DataSize.ofBytes(512)), storage);
         mvc = MockMvcBuilders.standaloneSetup(new UploadController(service, mock(UploadHistoryService.class)))
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -125,16 +131,18 @@ class UploadFlowTest {
                 .andExpect(jsonPath("$.code").value("S201"))
                 .andExpect(jsonPath("$.message").value("업로드 성공"))
                 .andExpect(jsonPath("$.data.uploadId").value(UPLOAD_ID))
-                .andExpect(jsonPath("$.data.conversations.length()").value(2))
-                .andExpect(jsonPath("$.data.conversations[0].externalId").value("duplicate"))
-                .andExpect(jsonPath("$.data.conversations[0].title").value("테스트"))
-                .andExpect(jsonPath("$.data.conversations[0].startedAt").value("2026-11-10T00:00:00+09:00"))
-                .andExpect(jsonPath("$.data.conversations[0].isDuplicate").value(true))
-                .andExpect(jsonPath("$.data.conversations[1].isDuplicate").value(false));
+                .andExpect(jsonPath("$.data.status").value("READY"))
+                .andExpect(jsonPath("$.data.settingsVersion").value(1))
+                .andExpect(jsonPath("$.data.expiresAt").isString())
+                .andExpect(jsonPath("$.data.conversationCount").value(4))
+                .andExpect(jsonPath("$.data.eligibleConversationCount").value(2))
+                .andExpect(jsonPath("$.data.conversationsUrl").value("/api/v1/uploads/10/conversations"))
+                .andExpect(jsonPath("$.data.conversations").doesNotExist());
 
         ArgumentCaptor<Upload> captured = ArgumentCaptor.forClass(Upload.class);
         verify(uploads).saveAndFlush(captured.capture());
         assertThat(captured.getValue().getTeam()).isSameAs(team);
+        assertThat(captured.getValue().getSettings()).isSameAs(settings);
         assertThat(captured.getValue().getUploader()).isSameAs(user);
         assertThat(captured.getValue().getStatus()).isEqualTo(UploadStatus.UPLOADED);
         assertThat(captured.getValue().getConversationCount()).isEqualTo(2);
@@ -143,12 +151,31 @@ class UploadFlowTest {
     }
 
     @Test
+    void storesSelectionIdAndHashForAnEligibleConversation() throws Exception {
+        String json = """
+                [{"id":"valid","create_time":%d,"current_node":"n",
+                  "mapping":{"n":{"message":{"author":{"role":"user"},"content":{"parts":["hello"]}}}}}]
+                """.formatted(Instant.parse(IN_PERIOD).getEpochSecond());
+        upload("conversations.json", bytes(json)).andExpect(status().isCreated());
+
+        verify(candidates).saveAll(org.mockito.ArgumentMatchers.argThat(saved -> {
+            UploadCandidate candidate = saved.iterator().next();
+            assertThat(candidate.getUpload().getId()).isEqualTo(UPLOAD_ID);
+            assertThat(candidate.getExternalId()).isEqualTo("valid");
+            assertThat(candidate.getSelectionId()).isNotBlank();
+            assertThat(candidate.getContentHash()).matches("[0-9a-f]{64}");
+            assertThat(candidate.isSelectable()).isTrue();
+            return true;
+        }));
+    }
+
+    @Test
     void zipReturnsCandidatesAndKeepsTheArchiveBytes() throws Exception {
         byte[] archive = archive("export/conversations.json", "[" + conversation("zip-id", IN_PERIOD) + "]");
 
         upload("export.zip", archive)
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.conversations[0].externalId").value("zip-id"));
+                .andExpect(jsonPath("$.data.eligibleConversationCount").value(1));
         assertThat(Files.readAllBytes(storage.pathFor(UPLOAD_ID))).isEqualTo(archive);
     }
 
@@ -156,37 +183,37 @@ class UploadFlowTest {
     void validExportWithNoConversationInTheTargetPeriodReturnsAnEmptyList() throws Exception {
         upload("conversations.json", bytes("[" + conversation("old", "2026-11-09T00:00:00Z") + "]"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.conversations").isEmpty());
+                .andExpect(jsonPath("$.data.eligibleConversationCount").value(0));
         verifyNoInteractions(conversations);
     }
 
     @Test
     void rejectsMalformedJsonAndMissingRequiredFieldsAndRemovesStagingFile() throws Exception {
         upload("conversations.json", bytes("[{\"id\":\"x\",\"mapping\":{}}]"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_FILE_FORMAT"));
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_STRUCTURE"));
         upload("conversations.json", bytes("[]{}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_FILE_FORMAT"));
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_STRUCTURE"));
         assertThat(directory).isEmptyDirectory();
         verifyNoInteractions(uploads);
     }
 
     @Test
     void rejectsMissingMultipartFile() throws Exception {
-        mvc.perform(multipart(URL, TEAM_ID))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_FILE_FORMAT"));
+        mvc.perform(multipart(URL, TEAM_ID).param("settingsVersion", "1"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
     }
 
     @Test
     void rejectsZipWithoutExportAndRejectsAnOversizedJsonEntry() throws Exception {
         upload("missing.zip", archive("user.json", "[]"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_FILE_FORMAT"));
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_STRUCTURE"));
         upload("oversized.zip", archive("conversations.json", "[]" + " ".repeat(512)))
                 .andExpect(status().is(413))
-                .andExpect(jsonPath("$.code").value("FILE_TOO_LARGE"));
+                .andExpect(jsonPath("$.code").value("EXPANDED_SIZE_EXCEEDED"));
         assertThat(directory).isEmptyDirectory();
     }
 
@@ -194,7 +221,7 @@ class UploadFlowTest {
     void servletSizeLimitUsesTheSameErrorCode() {
         var response = new GlobalExceptionHandler().handleMaxUploadSizeExceeded(new MaxUploadSizeExceededException(512));
         assertThat(response.getStatusCode().value()).isEqualTo(413);
-        assertThat(response.getBody().getCode()).isEqualTo("FILE_TOO_LARGE");
+        assertThat(response.getBody().getCode()).isEqualTo("UPLOAD_TOO_LARGE");
     }
 
     @Test
@@ -205,11 +232,32 @@ class UploadFlowTest {
 
         settings.updateTarget(DAY, null, null, null);
         upload("conversations.json", bytes("[]"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("TARGET_NOT_SET"));
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
 
         verifyNoInteractions(uploads);
         assertThat(directory).isEmptyDirectory();
+    }
+
+    @Test
+    void rejectsStaleAndMissingSettingsVersions() throws Exception {
+        var file = multipartFile("conversations.json", bytes("[]"));
+        mvc.perform(multipart(URL, TEAM_ID).file(file).param("settingsVersion", "2"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+        mvc.perform(multipart(URL, TEAM_ID).file(file))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        verifyNoInteractions(uploads);
+    }
+
+    @Test
+    void rejectsUnsupportedFilesAndUnsafeArchivePaths() throws Exception {
+        upload("export.txt", bytes("[]"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_FILE_TYPE"));
+        upload("export.zip", archive("../conversations.json", "[]"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("UNSAFE_ARCHIVE"));
     }
 
     @Test
@@ -238,14 +286,14 @@ class UploadFlowTest {
         PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
         when(manager.getTransaction(any())).thenAnswer(invocation -> new SimpleTransactionStatus());
 
-        new UploadFileExpiry(storage, uploads, manager).expireUnsubmittedFiles();
+        new UploadFileExpiry(storage, uploads, manager, candidates).expireUnsubmittedFiles();
 
         assertThat(storage.pathFor(10L)).doesNotExist();
         assertThat(storage.pathFor(11L)).exists();
     }
 
     private ResultActions upload(String name, byte[] body) throws Exception {
-        return mvc.perform(multipart(URL, TEAM_ID).file(multipartFile(name, body)));
+        return mvc.perform(multipart(URL, TEAM_ID).file(multipartFile(name, body)).param("settingsVersion", "1"));
     }
 
     private static MockMultipartFile multipartFile(String name, byte[] body) {

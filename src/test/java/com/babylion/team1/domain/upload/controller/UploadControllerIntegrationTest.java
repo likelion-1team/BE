@@ -20,7 +20,7 @@ import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
-import com.babylion.team1.global.jwt.JwtProvider;
+import com.babylion.team1.support.TestAccessTokens;
 import jakarta.persistence.EntityManager;
 import java.io.IOException;
 import java.net.http.HttpClient;
@@ -71,7 +71,7 @@ class UploadControllerIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
     @Autowired
-    private JwtProvider jwtProvider;
+    private TestAccessTokens accessTokens;
 
     @Autowired
     private ApplicationContext applicationContext;
@@ -94,6 +94,7 @@ class UploadControllerIntegrationTest {
 
         TeamSettings settings = TeamSettings.createDefault(team);
         settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        ReflectionTestUtils.setField(settings, "version", 1);
         entityManager.persist(settings);
 
         String sameTeamId = UUID.randomUUID().toString();
@@ -113,15 +114,14 @@ class UploadControllerIntegrationTest {
         MockMultipartFile file = new MockMultipartFile(
                 "file", "conversations.json", "application/json", original.getBytes(StandardCharsets.UTF_8));
 
-        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", team.getId())
+        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", team.getId()).param("settingsVersion", "1")
                         .file(file)
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(uploader.getId())))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(uploader.getId())))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.uploadId").isNumber())
-                .andExpect(jsonPath("$.data.conversations[0].externalId").value(sameTeamId))
-                .andExpect(jsonPath("$.data.conversations[0].isDuplicate").value(true))
-                .andExpect(jsonPath("$.data.conversations[1].externalId").value(otherTeamId))
-                .andExpect(jsonPath("$.data.conversations[1].isDuplicate").value(false));
+                .andExpect(jsonPath("$.data.conversationCount").value(2))
+                .andExpect(jsonPath("$.data.eligibleConversationCount").value(2))
+                .andExpect(jsonPath("$.data.conversations").doesNotExist());
 
         var row = jdbc.queryForMap("""
                 select id, conversation_count, duplicate_count, status
@@ -147,33 +147,33 @@ class UploadControllerIntegrationTest {
                         Long.class, team.getId()));
 
         String history = "/api/v1/teams/{teamId}/uploads";
-        String bearer = "Bearer " + jwtProvider.createAccessToken(uploader.getId());
+        String bearer = "Bearer " + accessTokens.create(uploader.getId());
         mockMvc.perform(get(history, team.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.page").value(0))
-                .andExpect(jsonPath("$.data.size").value(10))
-                .andExpect(jsonPath("$.data.totalElements").value(2))
-                .andExpect(jsonPath("$.data.content[0].uploadId").value((int) uploadId))
-                .andExpect(jsonPath("$.data.content[0].analyzedCount").value(0))
-                .andExpect(jsonPath("$.data.content[0].period.from").value(TARGET_DATE.toString()))
-                .andExpect(jsonPath("$.data.content[0].period.to").value(TARGET_DATE.toString()))
-                .andExpect(jsonPath("$.data.content[0].status").value("UPLOADED"))
-                .andExpect(jsonPath("$.data.content[1].period").value(nullValue()));
-        mockMvc.perform(get(history, team.getId()).param("page", "1").param("size", "1")
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items[0].uploadId").value((int) uploadId))
+                .andExpect(jsonPath("$.data.items[0].succeededCount").value(nullValue()))
+                .andExpect(jsonPath("$.data.items[0].targetFrom").value(TARGET_DATE.toString()))
+                .andExpect(jsonPath("$.data.items[0].targetTo").value(TARGET_DATE.toString()))
+                .andExpect(jsonPath("$.data.items[0].status").value("READY"))
+                .andExpect(jsonPath("$.data.items[1].targetFrom").value(nullValue()));
+        mockMvc.perform(get(history, team.getId()).param("page", "2").param("size", "1")
                         .header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.content.length()").value(1))
-                .andExpect(jsonPath("$.data.content[0].period").value(nullValue()))
-                .andExpect(jsonPath("$.data.page").value(1))
-                .andExpect(jsonPath("$.data.totalElements").value(2));
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].targetFrom").value(nullValue()))
+                .andExpect(jsonPath("$.data.page").value(2))
+                .andExpect(jsonPath("$.data.total").value(2));
         mockMvc.perform(get(history, otherTeam.getId()).header(HttpHeaders.AUTHORIZATION,
-                        "Bearer " + jwtProvider.createAccessToken(otherMember.getId())))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+                        "Bearer " + accessTokens.create(otherMember.getId())))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
 
     @Test
-    void returnsStoredProgressAndFailureOnlyToUploader() throws Exception {
+    void returnsUploadLifecycleOnlyToUploader() throws Exception {
         User uploader = User.builder().name("업로더").email("status-" + UUID.randomUUID() + "@test.com")
                 .passwordHash("test-password-hash").build();
         User other = User.builder().name("다른 사용자").email("other-" + UUID.randomUUID() + "@test.com")
@@ -186,42 +186,446 @@ class UploadControllerIntegrationTest {
         entityManager.persist(upload);
 
         String path = "/api/v1/uploads/{uploadId}";
-        String bearer = "Bearer " + jwtProvider.createAccessToken(uploader.getId());
+        String bearer = "Bearer " + accessTokens.create(uploader.getId());
 
         mockMvc.perform(get(path, upload.getId()))
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION,
-                        "Bearer " + jwtProvider.createAccessToken(other.getId())))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_UPLOADER"));
+                        "Bearer " + accessTokens.create(other.getId())))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(get(path, Long.MAX_VALUE).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("UPLOAD_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
-                .andExpect(jsonPath("$.data.status").value("UPLOADED"))
-                .andExpect(jsonPath("$.data.progress").value(0))
-                .andExpect(jsonPath("$.data.failReason").value(nullValue()))
-                .andExpect(jsonPath("$.data.savedCount").doesNotHaveJsonPath());
+                .andExpect(jsonPath("$.data.status").value("READY"))
+                .andExpect(jsonPath("$.data.uploadId").value(upload.getId()))
+                .andExpect(jsonPath("$.data.createdAt").isString())
+                .andExpect(jsonPath("$.data.expiresAt").isString())
+                .andExpect(jsonPath("$.data.cleanupStatus").value("PENDING"))
+                .andExpect(jsonPath("$.data.analysisId").value(nullValue()))
+                .andExpect(jsonPath("$.data.progress").doesNotHaveJsonPath());
 
         upload.startAnalysis(1);
-        upload.updateProgress(60);
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("ANALYZING"))
-                .andExpect(jsonPath("$.data.progress").value(60))
-                .andExpect(jsonPath("$.data.failReason").value(nullValue()))
-                .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
+                .andExpect(jsonPath("$.data.status").value("CONSUMED"))
+                .andExpect(jsonPath("$.data.analysisId").value(nullValue()));
 
         upload.fail("분석 실패");
+        entityManager.flush();
+        jdbc.update("update uploads set uploaded_at = ? where id = ?",
+                java.time.LocalDateTime.now().minusHours(2), upload.getId());
+        entityManager.clear();
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.code").value("UPLOAD_EXPIRED"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"replay", "success", "invalid-response", "transient-failure"})
+    void acceptsVersionedSelectionAndRunsWorkerAfterCommit(String scenario) throws Exception {
+        boolean commit = !scenario.equals("replay");
+        boolean fails = commit && !scenario.equals("success");
+        User uploader = User.builder().name("분석 테스트").email("analysis-it-" + UUID.randomUUID() + "@test.com")
+                .passwordHash("test-password-hash").build();
+        entityManager.persist(uploader);
+        Team team = saveTeam(uploader, "분석 테스트 팀");
+        var settings = TeamSettings.createDefault(team);
+        settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        ReflectionTestUtils.setField(settings, "version", 1);
+        entityManager.persist(settings);
+        var type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
+        entityManager.persist(type);
+        entityManager.flush();
+
+        long userId = uploader.getId();
+        long teamId = team.getId();
+        long typeId = type.getId();
+        long epoch = TARGET_DATE.atTime(10, 0).atZone(ZoneId.of("Asia/Seoul")).toEpochSecond();
+        String externalId = UUID.randomUUID().toString();
+        String export = """
+                [{"id":"%s","title":"테스트","create_time":%d,"current_node":"answer","mapping":{
+                  "question":{"parent":null,"children":["answer"],"message":{
+                    "author":{"role":"user"},"content":{"parts":["hello"]},
+                    "metadata":{"attachments":[{"name":"reports/summary.pdf","id":"internal-id"}]},"create_time":%d}},
+                  "answer":{"parent":"question","children":[],"message":{
+                    "author":{"role":"assistant"},"content":{"parts":["world"]},"metadata":{"model_slug":"gpt-4o"},"create_time":%d}}
+                }}]
+                """.formatted(externalId, epoch, epoch, epoch + 1);
+        String bearer = "Bearer " + accessTokens.create(userId);
+        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId).param("settingsVersion", "1")
+                        .file(new MockMultipartFile("file", "conversations.json", "application/json",
+                                export.getBytes(StandardCharsets.UTF_8)))
+                        .header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isCreated());
+        entityManager.flush();
+        Long uploadId = jdbc.queryForObject("select id from uploads where team_id = ?", Long.class, teamId);
+        String candidatePath = "/api/v1/uploads/{uploadId}/conversations";
+        String response = mockMvc.perform(get(candidatePath, uploadId).header(HttpHeaders.AUTHORIZATION, bearer)
+                        .param("q", "테스트").param("size", "1"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("FAILED"))
-                .andExpect(jsonPath("$.data.progress").value(60))
-                .andExpect(jsonPath("$.data.failReason").value("분석 실패"))
-                .andExpect(jsonPath("$.data.savedCount").doesNotHaveJsonPath())
-                .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
+                .andExpect(jsonPath("$.data.items[0].externalId").value(externalId))
+                .andExpect(jsonPath("$.data.items[0].selectable").value(true))
+                .andExpect(jsonPath("$.data.items[0].duplicateType").value("NONE"))
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andReturn().getResponse().getContentAsString();
+        String selectionId = com.jayway.jsonpath.JsonPath.read(response, "$.data.items[0].selectionId");
+        mockMvc.perform(get(candidatePath, uploadId).header(HttpHeaders.AUTHORIZATION, bearer).param("page", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(1));
+        String key = UUID.randomUUID().toString();
+        String body = """
+                {"settingsVersion":1,"selections":[{"selectionId":"%s","taskTypeId":%d}]}
+                """.formatted(selectionId, typeId);
+        var request = post("/api/v1/uploads/{uploadId}/analyses", uploadId)
+                .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
+                .header("Idempotency-Key", key);
+        if (!commit) {
+            mockMvc.perform(request.content(body.replace("\"settingsVersion\":1", "\"settingsVersion\":2")))
+                    .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+        }
+        mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.status").value("QUEUED")).andExpect(jsonPath("$.data.selectedCount").value(1));
+        entityManager.flush();
+        Long analysisId = jdbc.queryForObject("select id from analyses where upload_id = ?", Long.class, uploadId);
+        mockMvc.perform(get("/api/v1/uploads/{uploadId}", uploadId).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("CONSUMED"))
+                .andExpect(jsonPath("$.data.analysisId").value(analysisId))
+                .andExpect(jsonPath("$.data.progress").doesNotHaveJsonPath());
+        mockMvc.perform(get("/api/v1/teams/{teamId}/uploads", teamId).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].analysisId").value(analysisId))
+                .andExpect(jsonPath("$.data.items[0].analysisStatus").value("QUEUED"))
+                .andExpect(jsonPath("$.data.items[0].succeededCount").value(nullValue()))
+                .andExpect(jsonPath("$.data.items[0].failedCount").value(nullValue()));
+
+        String statusPath = "/api/v1/analyses/{analysisId}";
+        String itemsPath = statusPath + "/items";
+        mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("QUEUED"))
+                .andExpect(jsonPath("$.data.progressPercent").value(0))
+                .andExpect(jsonPath("$.data.stage").value(nullValue()));
+        mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer).param("size", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].status").value("QUEUED"))
+                .andExpect(jsonPath("$.data.items[0].feedbackIds").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(1));
+        if (!commit) {
+            mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer).param("size", "101"))
+                    .andExpect(status().isBadRequest());
+            var otherUser = User.builder().name("다른 사용자").email("other-" + UUID.randomUUID() + "@test.com")
+                    .passwordHash("test-password-hash").build();
+            entityManager.persist(otherUser);
+            mockMvc.perform(get(candidatePath, uploadId).header(HttpHeaders.AUTHORIZATION,
+                            "Bearer " + accessTokens.create(otherUser.getId())))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+            mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION,
+                            "Bearer " + accessTokens.create(otherUser.getId())))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        }
+
+        mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.analysisId").value(analysisId));
+        if (!commit) {
+            mockMvc.perform(request.content(body.replace("\"settingsVersion\":1", "\"settingsVersion\":2")))
+                    .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"));
+        }
+        assertThat(jdbc.queryForObject("select status from uploads where id = ?", String.class, uploadId))
+                .isEqualTo("CONSUMED");
+        assertThat(jdbc.queryForList("""
+                select m.content from messages m join analysis_items i on i.version_id = m.version_id
+                where i.analysis_id = ? order by m.idx
+                """, String.class, analysisId)).containsExactly("hello", "world");
+        if (!commit) {
+            verifyWorkerTimeoutRetries(analysisId);
+        }
+        if (commit) {
+            var gemini = applicationContext.getBean("geminiFeedbackClient");
+            var originalHttp = ReflectionTestUtils.getField(gemini, "http");
+            var originalKey = ReflectionTestUtils.getField(gemini, "apiKey");
+            var http = mock(HttpClient.class);
+            var mapper = new ObjectMapper();
+            var validAssessment = Map.of("scope", "IN_SCOPE", "outcome", "SUCCESS", "reworkType", "NONE",
+                    "evidenceMessageKeys", List.of("m_1"));
+            var invalidAssessment = new java.util.HashMap<String, Object>(validAssessment);
+            invalidAssessment.put("evidenceMessageKeys", List.of("m_999"));
+            var invalidResponse = modelResponse(mapper, invalidAssessment);
+            var assessmentResponse = modelResponse(mapper, validAssessment);
+            var feedbackResponse = modelResponse(mapper, Map.of("improvement", "개선 방안", "exampleAfter", "개선 프롬프트"));
+            @SuppressWarnings("unchecked")
+            HttpResponse<String> unavailable = mock(HttpResponse.class);
+            when(unavailable.statusCode()).thenReturn(503);
+            var provider = when(http.send(any(HttpRequest.class),
+                    org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()));
+            var observedStages = new java.util.concurrent.CopyOnWriteArrayList<String>();
+            switch (scenario) {
+                case "invalid-response" -> provider.thenReturn(invalidResponse);
+                case "transient-failure" -> provider.thenReturn(unavailable);
+                default -> provider.thenAnswer(invocation -> {
+                    String statusResponse = mockMvc.perform(get(statusPath, analysisId)
+                                    .header(HttpHeaders.AUTHORIZATION, bearer))
+                            .andReturn().getResponse().getContentAsString();
+                    observedStages.add(com.jayway.jsonpath.JsonPath.<String>read(statusResponse, "$.data.stage"));
+                    return unavailable;
+                }).thenReturn(assessmentResponse).thenAnswer(invocation -> {
+                    String statusResponse = mockMvc.perform(get(statusPath, analysisId)
+                                    .header(HttpHeaders.AUTHORIZATION, bearer))
+                            .andReturn().getResponse().getContentAsString();
+                    observedStages.add(com.jayway.jsonpath.JsonPath.<String>read(statusResponse, "$.data.stage"));
+                    return feedbackResponse;
+                });
+            }
+            Long priorVersionId = null;
+            if (fails) {
+                jdbc.update("""
+                        insert into conversation_versions
+                            (conversation_id, source_upload_id, input_version, content_hash, started_at,
+                             conversation_date, turn_count, estimated_tokens, created_at)
+                        select conversation_id, source_upload_id, 0, repeat('0',64), started_at,
+                               conversation_date, turn_count, estimated_tokens, created_at
+                        from conversation_versions where source_upload_id = ?
+                        """, uploadId);
+                priorVersionId = jdbc.queryForObject(
+                        "select id from conversation_versions where source_upload_id = ? and input_version = 0",
+                        Long.class, uploadId);
+                jdbc.update("update conversations set current_version_id = ? where upload_id = ?", priorVersionId, uploadId);
+            }
+            try {
+                ReflectionTestUtils.setField(gemini, "http", http);
+                ReflectionTestUtils.setField(gemini, "apiKey", "local-test-key");
+                TestTransaction.flagForCommit();
+                TestTransaction.end();
+                long deadline = System.nanoTime() + java.time.Duration.ofSeconds(15).toNanos();
+                String state;
+                do {
+                    state = jdbc.queryForObject("select status from analyses where id = ?", String.class, analysisId);
+                    if ("SUCCEEDED".equals(state) || "FAILED".equals(state)) {
+                        break;
+                    }
+                    Thread.sleep(50);
+                } while (System.nanoTime() < deadline);
+
+                if (fails) {
+                    assertThat(state).isEqualTo("FAILED");
+                    String code = scenario.equals("invalid-response") ? "INVALID_MODEL_RESPONSE" : "HTTP_503";
+                    int calls = scenario.equals("invalid-response") ? 1 : 3;
+                    assertThat(jdbc.queryForMap("""
+                            select status, failure_code, is_current from analysis_items where analysis_id = ?
+                            """, analysisId)).containsEntry("status", "FAILED").containsEntry("failure_code", code);
+                    assertThat(jdbc.queryForObject("""
+                            select count(*) from model_calls c join analysis_items i on i.id = c.item_id
+                            where i.analysis_id = ? and c.status = 'FAILED'
+                            """, Integer.class, analysisId)).isEqualTo(calls);
+                    assertThat(jdbc.queryForObject("select current_version_id from conversations where upload_id = ?",
+                            Long.class, uploadId)).isEqualTo(priorVersionId);
+                    verify(http, times(calls)).send(any(HttpRequest.class),
+                            org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any());
+                    String retryUpload = mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId).param("settingsVersion", "1")
+                                    .file(new MockMultipartFile("file", "conversations.json", "application/json",
+                                            export.getBytes(StandardCharsets.UTF_8)))
+                                    .header(HttpHeaders.AUTHORIZATION, bearer))
+                            .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+                    Number retryUploadId = com.jayway.jsonpath.JsonPath.read(retryUpload, "$.data.uploadId");
+                    String retryCandidates = mockMvc.perform(get(candidatePath, retryUploadId)
+                                    .header(HttpHeaders.AUTHORIZATION, bearer))
+                            .andExpect(status().isOk())
+                            .andExpect(jsonPath("$.data.items[0].selectable").value(true))
+                            .andReturn().getResponse().getContentAsString();
+                    String retrySelectionId = com.jayway.jsonpath.JsonPath.read(
+                            retryCandidates, "$.data.items[0].selectionId");
+
+                    mockMvc.perform(post("/api/v1/uploads/{uploadId}/analyses", retryUploadId)
+                                    .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
+                                    .header("Idempotency-Key", UUID.randomUUID().toString())
+                                    .content(body.replace(selectionId, retrySelectionId)))
+                            .andExpect(status().isAccepted());
+                    assertThat(jdbc.queryForObject("""
+                            select retry.version_id from analysis_items retry
+                            join analyses a on a.id = retry.analysis_id where a.upload_id = ?
+                            """, Long.class, retryUploadId.longValue())).isEqualTo(jdbc.queryForObject(
+                            "select version_id from analysis_items where analysis_id = ?", Long.class, analysisId));
+                    long retryDeadline = System.nanoTime() + java.time.Duration.ofSeconds(15).toNanos();
+                    String retryStatus;
+                    do {
+                        retryStatus = jdbc.queryForObject("select status from analyses where upload_id = ?",
+                                String.class, retryUploadId.longValue());
+                        if ("FAILED".equals(retryStatus)) {
+                            break;
+                        }
+                        Thread.sleep(50);
+                    } while (System.nanoTime() < retryDeadline);
+                    assertThat(retryStatus).isEqualTo("FAILED");
+                    return;
+                }
+                assertThat(state).isEqualTo("SUCCEEDED");
+                mockMvc.perform(get("/api/v1/teams/{teamId}/uploads", teamId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.items[0].analysisStatus").value("SUCCEEDED"))
+                        .andExpect(jsonPath("$.data.items[0].succeededCount").value(1))
+                        .andExpect(jsonPath("$.data.items[0].failedCount").value(0));
+                Long conversationVersionId = jdbc.queryForObject("""
+                        select i.version_id from analysis_items i
+                        where i.analysis_id = ?
+                        """, Long.class, analysisId);
+                mockMvc.perform(get("/api/v1/conversation-versions/{conversationVersionId}", conversationVersionId)
+                                .header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.excludedAttachments.length()").value(1))
+                        .andExpect(jsonPath("$.data.excludedAttachments[0]").value("summary.pdf"))
+                        .andExpect(jsonPath("$.data.messages[0].content").value("hello"));
+                assertThat(observedStages).containsExactly("ASSESSING", "GENERATING_FEEDBACK");
+                mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.succeededCount").value(1))
+                        .andExpect(jsonPath("$.data.progressPercent").value(100))
+                        .andExpect(jsonPath("$.data.stage").value(nullValue()));
+                mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.items[0].status").value("SUCCEEDED"))
+                        .andExpect(jsonPath("$.data.items[0].aiAssessment.outcome").value("SUCCESS"))
+                        .andExpect(jsonPath("$.data.items[0].feedbackIds[0]").isNumber());
+                Long itemId = jdbc.queryForObject("select id from analysis_items where analysis_id = ?", Long.class, analysisId);
+                String outcomePath = "/api/v1/analysis-items/{itemId}/outcome";
+                var outcome = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(outcomePath, itemId)
+                        .header(HttpHeaders.AUTHORIZATION, bearer).contentType(MediaType.APPLICATION_JSON);
+                mockMvc.perform(outcome.content("""
+                        {"expectedVersion":0,"outcome":"FAILURE","note":"개인 메모"}
+                        """))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.version").value(1))
+                        .andExpect(jsonPath("$.data.source").value("SELF_REPORT"))
+                        .andExpect(jsonPath("$.data.note").doesNotExist());
+                mockMvc.perform(outcome.content("""
+                        {"expectedVersion":0,"outcome":"SUCCESS"}
+                        """))
+                        .andExpect(status().isConflict())
+                        .andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+                mockMvc.perform(outcome.content("""
+                        {"expectedVersion":1,"outcome":"INVALID"}
+                        """))
+                        .andExpect(status().isUnprocessableContent())
+                        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+                mockMvc.perform(outcome.content("""
+                        {"expectedVersion":1,"outcome":"UNKNOWN"}
+                        """))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.version").value(2));
+                mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.items[0].outcomeAssessment.version").value(2))
+                        .andExpect(jsonPath("$.data.items[0].outcomeAssessment.outcome").value("UNKNOWN"))
+                        .andExpect(jsonPath("$.data.items[0].aiAssessment.outcome").value("SUCCESS"));
+                assertThat(jdbc.queryForList(
+                        "select outcome from outcome_assessments where item_id = ? order by version", String.class, itemId))
+                        .containsExactly("FAILURE", "UNKNOWN");
+                assertThat(jdbc.queryForObject(
+                        "select confirmed_outcome from analysis_items where id = ?", String.class, itemId)).isEqualTo("UNKNOWN");
+                var rework = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .put("/api/v1/analysis-items/{itemId}/rework-assessment", itemId)
+                        .header(HttpHeaders.AUTHORIZATION, bearer).contentType(MediaType.APPLICATION_JSON);
+                mockMvc.perform(rework.content("""
+                        {"expectedVersion":0,"type":"ERROR_CORRECTION","note":"개인 메모"}
+                        """))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.version").value(1))
+                        .andExpect(jsonPath("$.data.source").value("SELF_REPORT"))
+                        .andExpect(jsonPath("$.data.note").doesNotExist());
+                mockMvc.perform(rework.content("""
+                        {"expectedVersion":0,"type":"NONE"}
+                        """))
+                        .andExpect(status().isConflict())
+                        .andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+                mockMvc.perform(rework.content("""
+                        {"expectedVersion":1,"type":"INVALID"}
+                        """))
+                        .andExpect(status().isUnprocessableContent())
+                        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+                mockMvc.perform(rework.content("""
+                        {"expectedVersion":1,"type":"NONE"}
+                        """))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.version").value(2));
+                mockMvc.perform(get(itemsPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.items[0].reworkAssessment.version").value(2))
+                        .andExpect(jsonPath("$.data.items[0].reworkAssessment.type").value("NONE"))
+                        .andExpect(jsonPath("$.data.items[0].outcomeAssessment.outcome").value("UNKNOWN"))
+                        .andExpect(jsonPath("$.data.items[0].aiAssessment.outcome").value("SUCCESS"));
+                assertThat(jdbc.queryForList(
+                        "select type from rework_assessments where item_id = ? order by version", String.class, itemId))
+                        .containsExactly("ERROR_CORRECTION", "NONE");
+                assertThat(jdbc.queryForObject("select confirmed_rework_type from analysis_items where id = ?",
+                        String.class, itemId)).isEqualTo("NONE");
+
+
+
+                assertThat(jdbc.queryForObject(
+                        "select status from analysis_items where analysis_id = ?", String.class, analysisId))
+                        .isEqualTo("SUCCEEDED");
+                assertThat(jdbc.queryForObject(
+                        "select succeeded_count from analyses where id = ?", Integer.class, analysisId)).isEqualTo(1);
+                assertThat(jdbc.queryForObject(
+                        "select count(*) from feedbacks where upload_id = ?", Long.class, uploadId)).isPositive();
+                assertThat(jdbc.queryForMap("""
+                        select scope_classification, ai_outcome, ai_rework_type, ai_evidence_message_keys
+                        from analysis_items where analysis_id = ?
+                        """, analysisId)).containsEntry("scope_classification", "IN_SCOPE")
+                        .containsEntry("ai_outcome", "SUCCESS").containsEntry("ai_rework_type", "NONE")
+                        .containsEntry("ai_evidence_message_keys", "[\"m_1\"]");
+                assertThat(jdbc.queryForList("""
+                        select concat(c.purpose, ':', c.attempt, ':', c.status)
+                        from model_calls c join analysis_items i on i.id = c.item_id
+                        where i.analysis_id = ? order by c.id
+                        """, String.class, analysisId))
+                        .containsExactly("ASSESSMENT:1:FAILED", "ASSESSMENT:2:SUCCEEDED", "FEEDBACK:1:SUCCEEDED");
+                assertThat(jdbc.queryForObject("""
+                        select sum(c.input_tokens) from model_calls c join analysis_items i on i.id = c.item_id
+                        where i.analysis_id = ?
+                        """, Integer.class, analysisId)).isEqualTo(20);
+            } finally {
+                ReflectionTestUtils.setField(gemini, "http", originalHttp);
+                ReflectionTestUtils.setField(gemini, "apiKey", originalKey);
+            }
+        }
+    }
+
+    private void verifyWorkerTimeoutRetries(Long analysisId) {
+        var worker = applicationContext.getBean("versionedAnalysisWorker");
+        var first = ReflectionTestUtils.invokeMethod(worker, "claim", analysisId);
+        assertThat(first).isNotNull();
+
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            entityManager.flush();
+            assertThat(jdbc.queryForObject("select attempt_count from analysis_items where analysis_id = ?",
+                    Integer.class, analysisId)).isEqualTo(attempt);
+            jdbc.update("update analysis_items set claim_expires_at = ? where analysis_id = ?",
+                    java.time.LocalDateTime.of(2000, 1, 1, 0, 0), analysisId);
+            entityManager.clear();
+            var next = ReflectionTestUtils.invokeMethod(worker, "claim", analysisId);
+            if (attempt < 3) {
+                assertThat(next).isNotNull();
+                ReflectionTestUtils.invokeMethod(worker, "save", analysisId, first, null);
+                assertThat(jdbc.queryForObject("select completed_count from analyses where id = ?",
+                        Integer.class, analysisId)).isZero();
+            } else {
+                assertThat(next).isNull();
+            }
+        }
+        entityManager.flush();
+        assertThat(jdbc.queryForMap("select status, failure_code from analysis_items where analysis_id = ?", analysisId))
+                .containsEntry("status", "FAILED").containsEntry("failure_code", "WORKER_TIMEOUT");
+        assertThat(jdbc.queryForMap("select status, completed_count, failed_count from analyses where id = ?", analysisId))
+                .containsEntry("status", "FAILED").containsEntry("completed_count", 1).containsEntry("failed_count", 1);
     }
 
     @ParameterizedTest
@@ -255,8 +659,10 @@ class UploadControllerIntegrationTest {
         Team team = saveTeam(uploader, "분석 테스트 팀");
         var settings = TeamSettings.createDefault(team);
         settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        ReflectionTestUtils.setField(settings, "version", 1);
         entityManager.persist(settings);
-        var type = TeamTaskType.builder().team(team).name("보고서").successDefinition("제출").build();
+        var type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(type);
         entityManager.flush();
 
@@ -273,14 +679,14 @@ class UploadControllerIntegrationTest {
                     "author":{"role":"assistant"},"content":{"parts":["world"]},"metadata":{"model_slug":"gpt-4o"},"create_time":%d}}
                 }}]
                 """.formatted(externalId, epoch, epoch, epoch + 1);
-        String bearer = "Bearer " + jwtProvider.createAccessToken(userId);
+        String bearer = "Bearer " + accessTokens.create(userId);
         TestTransaction.flagForCommit();
         TestTransaction.end();
 
         try {
             ReflectionTestUtils.setField(gemini, "http", http);
             ReflectionTestUtils.setField(gemini, "apiKey", "local-test-key");
-            mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+            mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId).param("settingsVersion", "1")
                             .file(new MockMultipartFile("file", "conversations.json", "application/json",
                                     export.getBytes(StandardCharsets.UTF_8)))
                             .header(HttpHeaders.AUTHORIZATION, bearer))
@@ -290,13 +696,9 @@ class UploadControllerIntegrationTest {
                     TARGET_DATE.plusDays(1), TARGET_DATE.plusDays(1), teamId);
             Files.delete(uploadDirectory.resolve(uploadId + ".period"));
 
-            mockMvc.perform(post("/api/v1/uploads/{uploadId}/analyses", uploadId)
-                            .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
-                            .content("""
-                                    {"selections":[{"externalId":"%s","taskTypeId":%d}]}
-                                    """.formatted(externalId, typeId)))
-                    .andExpect(status().isAccepted())
-                    .andExpect(jsonPath("$.data.status").value("ANALYZING"));
+            jdbc.update("update uploads set status = 'ANALYZING', selected_count = 1 where id = ?", uploadId);
+            new com.babylion.team1.domain.upload.service.LegacyAnalysisWorkerTestDriver(applicationContext)
+                    .run(uploadId, "conversations.json", TARGET_DATE, externalId, typeId);
 
             long deadline = System.nanoTime() + java.time.Duration.ofSeconds(15).toNanos();
             Path original = uploadDirectory.resolve(uploadId + ".export");
@@ -315,18 +717,16 @@ class UploadControllerIntegrationTest {
             mockMvc.perform(get("/api/v1/teams/{teamId}/uploads", teamId)
                             .header(HttpHeaders.AUTHORIZATION, bearer))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.content[0].status").value("DONE"))
-                    .andExpect(jsonPath("$.data.content[0].analyzedCount").value(1))
-                    .andExpect(jsonPath("$.data.content[0].period.from").value(TARGET_DATE.toString()))
-                    .andExpect(jsonPath("$.data.content[0].period.to").value(TARGET_DATE.toString()));
+                    .andExpect(jsonPath("$.data.items[0].status").value("CONSUMED"))
+                    .andExpect(jsonPath("$.data.items[0].succeededCount").value(1))
+                    .andExpect(jsonPath("$.data.items[0].targetFrom").value(TARGET_DATE.toString()))
+                    .andExpect(jsonPath("$.data.items[0].targetTo").value(TARGET_DATE.toString()));
             mockMvc.perform(get("/api/v1/uploads/{uploadId}", uploadId)
                             .header(HttpHeaders.AUTHORIZATION, bearer))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.status").value("DONE"))
-                    .andExpect(jsonPath("$.data.progress").value(100))
-                    .andExpect(jsonPath("$.data.failReason").value(nullValue()))
-                    .andExpect(jsonPath("$.data.savedCount").value(1))
-                    .andExpect(jsonPath("$.data.skippedDuplicateCount").value(0));
+                    .andExpect(jsonPath("$.data.status").value("CONSUMED"))
+                    .andExpect(jsonPath("$.data.analysisId").value(nullValue()))
+                    .andExpect(jsonPath("$.data.progress").doesNotHaveJsonPath());
             assertThat(jdbc.queryForObject("select progress from uploads where id = ?", Integer.class, uploadId))
                     .isEqualTo(100);
             assertThat(jdbc.queryForObject("select count(*) from uploads where id = ? and analyzed_at is not null",
@@ -349,13 +749,6 @@ class UploadControllerIntegrationTest {
                     .andExpect(jsonPath("$.data.example.after").value(expected));
             verify(http, times(geminiSucceeds ? 1 : 2)).send(any(HttpRequest.class),
                     org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any());
-            mockMvc.perform(post("/api/v1/uploads/{uploadId}/analyses", uploadId)
-                            .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
-                            .content("""
-                                    {"selections":[{"externalId":"%s","taskTypeId":%d}]}
-                                    """.formatted(externalId, typeId)))
-                    .andExpect(status().isConflict())
-                    .andExpect(jsonPath("$.code").value("ANALYSIS_ALREADY_COMPLETED"));
         } finally {
             ReflectionTestUtils.setField(gemini, "http", originalHttp);
             ReflectionTestUtils.setField(gemini, "apiKey", originalKey);
@@ -365,6 +758,8 @@ class UploadControllerIntegrationTest {
             jdbc.update("delete from messages where conversation_id in (select id from conversations where team_id = ?)",
                     teamId);
             jdbc.update("delete from conversations where team_id = ?", teamId);
+            jdbc.update("delete from upload_candidates where upload_id in (select id from uploads where team_id = ?)",
+                    teamId);
             jdbc.update("delete from uploads where team_id = ?", teamId);
             jdbc.update("delete from team_task_types where team_id = ?", teamId);
             jdbc.update("delete from team_settings where team_id = ?", teamId);
@@ -372,6 +767,17 @@ class UploadControllerIntegrationTest {
             jdbc.update("delete from teams where id = ?", teamId);
             jdbc.update("delete from users where id = ?", userId);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private HttpResponse<String> modelResponse(ObjectMapper mapper, Map<String, ?> content) {
+        HttpResponse<String> response = mock(HttpResponse.class);
+        var part = Map.of("text", mapper.writeValueAsString(content));
+        var candidate = Map.of("content", Map.of("parts", List.of(part)));
+        when(response.statusCode()).thenReturn(200);
+        when(response.body()).thenReturn(mapper.writeValueAsString(Map.of("candidates", List.of(candidate),
+                "usageMetadata", Map.of("promptTokenCount", 10, "candidatesTokenCount", 3))));
+        return response;
     }
 
     private Team saveTeam(User uploader, String name) {
@@ -382,7 +788,8 @@ class UploadControllerIntegrationTest {
     }
 
     private void saveExistingConversation(Team team, User uploader, String externalId) {
-        TeamTaskType type = TeamTaskType.builder().team(team).name("보고서").successDefinition("제출").build();
+        TeamTaskType type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(type);
         Upload previous = Upload.builder().team(team).uploader(uploader).fileName("previous.json")
                 .conversationCount(1).build();

@@ -11,14 +11,23 @@ import lombok.Getter;
 public class CustomException extends RuntimeException {
 
     private final ErrorCode errorCode;
+    private final Object errors;
 
     public CustomException(ErrorCode errorCode) {
-        super(errorCode.getMessage());
-        this.errorCode = errorCode;
+        this(errorCode, errorCode.getMessage());
     }
 
     public CustomException(ErrorCode errorCode, String message) {
+        this(errorCode, message, null);
+    }
+
+    private CustomException(ErrorCode errorCode, String message, Object errors) {
         super(message);
         this.errorCode = errorCode;
+        this.errors = errors;
+    }
+
+    public static CustomException withErrors(ErrorCode errorCode, Object errors) {
+        return new CustomException(errorCode, errorCode.getMessage(), errors);
     }
 }

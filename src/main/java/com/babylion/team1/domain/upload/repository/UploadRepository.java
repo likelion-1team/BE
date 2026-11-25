@@ -11,6 +11,16 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface UploadRepository extends JpaRepository<Upload, Long> {
+    @org.springframework.data.jpa.repository.Query("""
+            select u.fileName from Upload u
+            where u.id = :id and u.uploader.id = :userId and u.status in :statuses
+            """)
+    java.util.Optional<String> findReadableFileName(Long id, Long userId,
+            java.util.Collection<com.babylion.team1.domain.upload.entity.UploadStatus> statuses);
+
+    java.util.List<Upload> findTop100ByStatusAndOriginalCleanedFalseOrderByConsumedAtAsc(
+            com.babylion.team1.domain.upload.entity.UploadStatus status);
+
 
     Page<Upload> findByTeamIdAndUploaderIdOrderByUploadedAtDescIdDesc(
             Long teamId, Long uploaderId, Pageable pageable);

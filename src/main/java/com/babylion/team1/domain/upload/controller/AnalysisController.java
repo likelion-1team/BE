@@ -2,11 +2,12 @@ package com.babylion.team1.domain.upload.controller;
 
 import com.babylion.team1.domain.upload.dto.request.AnalysisStartRequest;
 import com.babylion.team1.domain.upload.dto.response.AnalysisStartResponse;
-import com.babylion.team1.domain.upload.dto.response.AnalysisStatusResponse;
+import com.babylion.team1.domain.upload.dto.response.UploadStatusResponse;
 import com.babylion.team1.domain.upload.service.AnalysisStartService;
-import com.babylion.team1.domain.upload.service.AnalysisStatusService;
+import com.babylion.team1.domain.upload.service.UploadStatusService;
 import com.babylion.team1.global.response.ApiResponse;
-import jakarta.validation.Valid;
+import java.net.URI;
+import org.springframework.web.bind.annotation.RequestHeader;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -22,21 +23,23 @@ import org.springframework.web.bind.annotation.RestController;
 public class AnalysisController {
 
     private final AnalysisStartService analysisStartService;
-    private final AnalysisStatusService analysisStatusService;
+    private final UploadStatusService uploadStatusService;
 
     @GetMapping("/api/v1/uploads/{uploadId}")
-    public ApiResponse<AnalysisStatusResponse> getStatus(
+    public ApiResponse<UploadStatusResponse> getStatus(
             @PathVariable Long uploadId,
             @AuthenticationPrincipal Long userId) {
-        return ApiResponse.success("S200", "조회 성공", analysisStatusService.getStatus(uploadId, userId));
+        return ApiResponse.success("S200", "조회 성공", uploadStatusService.getStatus(uploadId, userId));
     }
 
     @PostMapping(path = "/api/v1/uploads/{uploadId}/analyses", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ApiResponse<AnalysisStartResponse>> start(
             @PathVariable Long uploadId,
             @AuthenticationPrincipal Long userId,
-            @Valid @RequestBody AnalysisStartRequest request) {
-        var response = analysisStartService.start(uploadId, userId, request.selections());
-        return ResponseEntity.accepted().body(ApiResponse.success("S202", "분석 시작", response));
+            @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestBody AnalysisStartRequest request) {
+        var response = analysisStartService.start(uploadId, userId, idempotencyKey, request);
+        return ResponseEntity.accepted().location(URI.create(response.statusUrl()))
+                .body(ApiResponse.success("S202", "분석 요청 수락", response));
     }
 }

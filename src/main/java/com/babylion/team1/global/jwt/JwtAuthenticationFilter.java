@@ -1,5 +1,6 @@
 package com.babylion.team1.global.jwt;
 
+import com.babylion.team1.domain.auth.service.AuthSessionValidator;
 import com.babylion.team1.global.exception.ErrorCode;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
@@ -22,7 +23,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *
  * 토큰이 없거나 유효하지 않아도 여기서 바로 응답하지 않는다.
  * permitAll 경로는 그대로 통과시키고, 인증이 필요한 경로만 JwtAuthenticationEntryPoint가 401로 응답한다.
- * 실패 원인은 request attribute로 넘겨 응답 코드(INVALID_TOKEN, EXPIRED_TOKEN)를 구분한다.
+ * 실패 원인은 request attribute로 넘겨 응답 코드(INVALID_TOKEN, SESSION_EXPIRED)를 구분한다.
+ * 토큰이 만료 전이어도 로그아웃 등으로 세션이 폐기됐으면 인증하지 않는다.
  *
  * SecurityConfig에서 직접 생성해 등록한다. @Component로 만들면 서블릿 필터로도 한 번 더 등록되므로 붙이지 않는다.
  */
@@ -33,6 +35,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final JwtProvider jwtProvider;
+    private final AuthSessionValidator authSessionValidator;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -53,18 +56,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
             Long userId = Long.valueOf(claims.getSubject());
+            if (!authSessionValidator.isActive(jwtProvider.getSessionId(claims), userId)) {
+                request.setAttribute(ERROR_CODE_ATTRIBUTE, ErrorCode.SESSION_EXPIRED);
+                return;
+            }
             UsernamePasswordAuthenticationToken authentication =
                     new UsernamePasswordAuthenticationToken(userId, null, List.of());
             SecurityContextHolder.getContext().setAuthentication(authentication);
         } catch (ExpiredJwtException e) {
-            request.setAttribute(ERROR_CODE_ATTRIBUTE, ErrorCode.EXPIRED_TOKEN);
+            request.setAttribute(ERROR_CODE_ATTRIBUTE, ErrorCode.SESSION_EXPIRED);
         } catch (JwtException | IllegalArgumentException e) {
             // 서명 불일치, 형식 오류, subject가 숫자가 아닌 경우 등
             request.setAttribute(ERROR_CODE_ATTRIBUTE, ErrorCode.INVALID_TOKEN);
         }
     }
 
-    private String resolveToken(HttpServletRequest request) {
+    /** Bearer 토큰이 없으면 null을 반환한다. */
+    public static String resolveToken(HttpServletRequest request) {
         String header = request.getHeader(HttpHeaders.AUTHORIZATION);
         if (header == null || !header.startsWith(BEARER_PREFIX)) {
             return null;
