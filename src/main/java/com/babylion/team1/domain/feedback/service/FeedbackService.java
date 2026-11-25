@@ -96,7 +96,12 @@ public class FeedbackService {
 
     @Transactional
     public void cancelReaction(Long feedbackId, Long userId) {
-        lockOwnedFeedback(feedbackId, userId);
+        feedbackRepository.findByIdForUpdate(feedbackId)
+                .filter(feedback -> feedback.isOwnedBy(userId))
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        if (evidenceRepository.hasDeletedOriginal(feedbackId)) {
+            throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
         reactionRepository.findByFeedbackIdAndUserId(feedbackId, userId)
                 .ifPresent(reactionRepository::delete);
     }
