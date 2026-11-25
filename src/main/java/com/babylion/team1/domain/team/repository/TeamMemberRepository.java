@@ -2,7 +2,6 @@ package com.babylion.team1.domain.team.repository;
 
 import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
-import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import java.util.List;
 import java.util.Optional;
@@ -33,15 +32,15 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 		""")
 	Page<MyTeamResponse> findMyTeams(@Param("userId") Long userId, Pageable pageable);
 
-	String V4_SUBMISSION = """
+	String V4_SELECTION = """
 			item.team = membership.team
 			and item.user = membership.user
 			and item.conversationDate between settings.targetFrom and settings.targetTo
-			and item.status = SUCCEEDED
-			and item.current = true
 			and exists (select 1 from Analysis a where a = item.analysis and a.settings = settings)
 			and exists (select 1 from ConversationVersion v where v = item.version and v.deletedAt is null)
 			""";
+
+	String V4_SUBMISSION = V4_SELECTION + " and item.status = SUCCEEDED and item.current = true";
 
 	String LEGACY_SUBMISSION = """
 			c.team = membership.team
@@ -68,19 +67,26 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 	List<TeamMemberListResponse> findTeamMembersWithSubmission(@Param("teamId") Long teamId);
 
 	@Query("""
-		select new com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse(
+		select new com.babylion.team1.domain.team.repository.TeamMemberRepository$SubmissionSummary(
 			count(distinct case when item.id is not null or c.id is not null then membership.id else null end),
 			count(distinct membership.id),
-			count(distinct item.id) + count(distinct c.id),
-			settings.targetCount)
+			count(distinct case when (item.status = SUCCEEDED and item.current = true) or c.id is not null
+				then membership.id else null end),
+			count(distinct case when item.status = SUCCEEDED and item.current = true then item.id else null end)
+				+ count(distinct c.id),
+			settings.targetCount,
+			coalesce(settings.version, 0))
 		from TeamMember membership
 		left join TeamSettings settings on settings.team = membership.team and settings.current = true
 		left join AnalysisItem item on
-		""" + V4_SUBMISSION + """
+		""" + V4_SELECTION + """
 		left join Conversation c on
 		""" + LEGACY_SUBMISSION + """
 		where membership.team.id = :teamId
-		group by settings.targetCount
+		group by settings.targetCount, settings.version
 		""")
-	TeamSubmissionResponse findTeamSubmissionSummary(@Param("teamId") Long teamId);
+	SubmissionSummary findTeamSubmissionSummary(@Param("teamId") Long teamId);
+
+	record SubmissionSummary(long submittedMembers, long totalMembers, long contributors,
+							 long analyzedConversations, Integer targetCount, Integer settingsVersion) {}
 }
