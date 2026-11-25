@@ -39,7 +39,7 @@ public class FeedbackController {
             @AuthenticationPrincipal Long userId,
             @Valid @RequestBody FeedbackShareRequest request) {
         return ApiResponse.success("S200", "공유 설정 변경 성공",
-                feedbackService.updateShare(feedbackId, userId, request.shared()));
+                feedbackService.updateShare(feedbackId, userId, request.shared(), request.previewId(), request.previewVersion()));
     }
 
     @PutMapping("/api/v1/feedbacks/{feedbackId}/reaction")

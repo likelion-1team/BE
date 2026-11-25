@@ -72,6 +72,55 @@ class SharedFeedbackControllerIntegrationTest {
     private JdbcTemplate jdbc;
 
     @Test
+    void sharePreviewStoresOnlyPublicTemplatesAndHidesOtherOwners() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT,
+                "공유할 작업 요약", "private@example.com 010-1234-5678 형식은 표로 작성");
+        Long conversationId = addPrivateEvidence(feedback);
+        entityManager.flush();
+        String path = "/api/v1/feedbacks/{feedbackId}/share-preview";
+        var post = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId());
+        String response = mockMvc.perform(post
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code").value("S201"))
+                .andExpect(jsonPath("$.data.previewVersion").value(1))
+                .andExpect(jsonPath("$.data.redactionStatus").value("PASSED"))
+                .andExpect(jsonPath("$.data.content.type").value(MISSING_CONTEXT))
+                .andExpect(jsonPath("$.data.content.example.before").value("개선 전 예시"))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(response).contains("형식은 표로 작성").doesNotContain( "private@example.com", "010-1234-5678", "보호된 원문",
+                "feedbackId", "conversationId");
+        assertThat(jdbc.queryForObject("""
+                select timestampdiff(minute, created_at, expires_at)
+                from share_previews where feedback_id = ?
+                """, Integer.class, feedback.getId())).isEqualTo(30);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.leader().getId())))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        var conversation = entityManager.find(Conversation.class, conversationId);
+        var deleted = saveConversationVersion(conversation, 1, "보호된 원문");
+        conversation.promote(deleted);
+        entityManager.flush();
+        jdbc.update("update conversation_versions set deleted_at = current_timestamp(6) where id = ?", deleted.getId());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId())))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+
+        var unsupported = saveFeedback(fixture.taskType(), fixture.member(), "PRIVATE_CUSTOM", "비공개 유형", null);
+        addPrivateEvidence(unsupported);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, unsupported.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId())))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("SHARING_REDACTION_FAILED"));
+        assertThat(jdbc.queryForObject("select count(*) from share_previews where feedback_id = ?",
+                Integer.class, unsupported.getId())).isZero();
+    }
+
+    @Test
     void feedbackDetailReturnsEvidenceMetadataOnlyToOwner() throws Exception {
         String path = "/api/v1/feedbacks/{feedbackId}";
         TeamFixture fixture = saveTeam();
@@ -319,12 +368,31 @@ class SharedFeedbackControllerIntegrationTest {
         entityManager.flush();
         entityManager.clear();
 
-        share(feedback.getId(), fixture.member(), "{\"shared\":true}")
+        addPrivateEvidence(entityManager.find(Feedback.class, feedback.getId()));
+        var previewResult = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/v1/feedbacks/{feedbackId}/share-preview", feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId())))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        Number previewId = JsonPath.read(previewResult, "$.data.previewId");
+        String approval = """
+                {"shared":true,"previewId":%d,"previewVersion":1}
+                """.formatted(previewId.longValue());
+        share(feedback.getId(), fixture.member(), approval)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.message").value("공유 설정 변경 성공"))
                 .andExpect(jsonPath("$.data.isShared").value(true));
-        entityManager.find(Feedback.class, feedback.getId()).addToGuide();
+        mockMvc.perform(put("/api/v1/feedbacks/{feedbackId}/guide", feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.leader().getId())))
+                .andExpect(status().isOk());
+        assertThat(jdbc.queryForObject("""
+                select count(*) from guides g join shared_cases c on c.id = g.shared_case_id
+                where c.feedback_id = ? and c.status = 'ACTIVE'
+                """, Integer.class, feedback.getId())).isEqualTo(1);
+        share(feedback.getId(), fixture.member(), approval)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("INVALID_STATE"));
+
 
         request(SHARED_CASES, teamId, fixture.leader()).andExpect(jsonPath("$.data.items.length()").value(1));
         request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.groups.length()").value(1));
@@ -337,6 +405,12 @@ class SharedFeedbackControllerIntegrationTest {
         Feedback revoked = entityManager.find(Feedback.class, feedback.getId());
         assertThat(revoked.getIsGuide()).isFalse();
         assertThat(revoked.getSharedAt()).isNull();
+        assertThat(jdbc.queryForObject("select status from shared_cases where feedback_id = ?",
+                String.class, feedback.getId())).isEqualTo("REVOKED");
+        assertThat(jdbc.queryForObject("""
+                select count(*) from guides g join shared_cases c on c.id = g.shared_case_id
+                where c.feedback_id = ?
+                """, Integer.class, feedback.getId())).isZero();
         assertThat(revoked.getGuideAddedAt()).isNull();
         request(SHARED_CASES, teamId, fixture.leader()).andExpect(jsonPath("$.data.items").isEmpty());
         request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.groups").isEmpty());

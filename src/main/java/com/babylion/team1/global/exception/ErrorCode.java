@@ -29,6 +29,7 @@ public enum ErrorCode {
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_SERVER_ERROR", "서버 내부 오류가 발생했습니다."),
 
     // Auth
+    SHARING_REDACTION_FAILED(HttpStatus.UNPROCESSABLE_CONTENT, "SHARING_REDACTION_FAILED", "공유 내용의 비식별화를 확인할 수 없습니다."),
     VALIDATION_FAILED(HttpStatus.UNPROCESSABLE_CONTENT, "VALIDATION_FAILED", "입력값을 확인해 주세요."),
     EMAIL_IN_USE(HttpStatus.CONFLICT, "EMAIL_IN_USE", "이미 가입된 이메일입니다."),
     RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMITED", "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."),
