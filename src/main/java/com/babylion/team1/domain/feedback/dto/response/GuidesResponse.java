@@ -1,6 +1,7 @@
 package com.babylion.team1.domain.feedback.dto.response;
 
 import com.babylion.team1.domain.feedback.entity.Feedback;
+import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Content;
 import com.babylion.team1.domain.feedback.entity.FeedbackType;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -10,11 +11,11 @@ import java.util.Map;
 
 public record GuidesResponse(List<Group> groups) {
 
-    public static GuidesResponse from(List<Feedback> feedbacks) {
+    public static GuidesResponse from(List<Feedback> feedbacks, Map<Long, Content> snapshots) {
         Map<String, List<Guide>> guidesByType = new LinkedHashMap<>();
         for (Feedback feedback : feedbacks) {
             String type = FeedbackType.displayName(feedback.getType());
-            guidesByType.computeIfAbsent(type, ignored -> new ArrayList<>()).add(Guide.from(feedback));
+            guidesByType.computeIfAbsent(type, ignored -> new ArrayList<>()).add(Guide.from(feedback, snapshots.get(feedback.getId())));
         }
         return new GuidesResponse(guidesByType.entrySet().stream()
                 .map(entry -> new Group(entry.getKey(), entry.getValue()))
@@ -33,8 +34,7 @@ public record GuidesResponse(List<Group> groups) {
             OffsetDateTime guideAddedAt
     ) {
 
-        private static Guide from(Feedback feedback) {
-            var snapshot = feedback.getSharedPreviewContent();
+        private static Guide from(Feedback feedback, Content snapshot) {
             return new Guide(
                     feedback.getId(),
                     snapshot == null ? feedback.getTitle() : snapshot.title(),

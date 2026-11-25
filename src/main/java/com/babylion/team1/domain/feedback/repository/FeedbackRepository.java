@@ -61,7 +61,10 @@ public interface FeedbackRepository extends JpaRepository<Feedback, Long> {
     @Query("""
             select f from Feedback f
             join fetch f.taskType task
-            where f.team.id = :teamId and f.isShared = true
+            where f.team.id = :teamId and (
+                exists (select 1 from SharedCase s where s.feedback = f and s.status = ACTIVE)
+                or (f.isShared = true and not exists (select 1 from SharedCase s where s.feedback = f))
+            )
               and (:taskTypeId is null or task.id = :taskTypeId)
               and (:type is null or f.type = :type or f.type = :alternateType)
             order by f.sharedAt desc, f.id desc
@@ -73,7 +76,11 @@ public interface FeedbackRepository extends JpaRepository<Feedback, Long> {
 
     @Query("""
             select f from Feedback f
-            where f.team.id = :teamId and f.isShared = true and f.isGuide = true
+            where f.team.id = :teamId and (
+                exists (select 1 from Guide g where g.sharedCase.feedback = f and g.sharedCase.status = ACTIVE)
+                or (f.isShared = true and f.isGuide = true
+                    and not exists (select 1 from SharedCase s where s.feedback = f))
+            )
               and (:type is null or f.type = :type or f.type = :alternateType)
             order by f.guideAddedAt desc, f.id desc
             """)

@@ -1,13 +1,15 @@
 package com.babylion.team1.domain.feedback.dto.response;
 
 import com.babylion.team1.domain.feedback.entity.Feedback;
+import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Content;
 import com.babylion.team1.domain.feedback.entity.FeedbackType;
 import java.util.List;
+import java.util.Map;
 
 public record SharedCasesResponse(List<Item> items) {
 
-    public static SharedCasesResponse from(List<Feedback> feedbacks) {
-        return new SharedCasesResponse(feedbacks.stream().map(Item::from).toList());
+    public static SharedCasesResponse from(List<Feedback> feedbacks, Map<Long, Content> snapshots) {
+        return new SharedCasesResponse(feedbacks.stream().map(feedback -> Item.from(feedback, snapshots.get(feedback.getId()))).toList());
     }
 
     public record Item(
@@ -21,8 +23,7 @@ public record SharedCasesResponse(List<Item> items) {
             boolean isGuide
     ) {
 
-        private static Item from(Feedback feedback) {
-            var snapshot = feedback.getSharedPreviewContent();
+        private static Item from(Feedback feedback, Content snapshot) {
             return new Item(
                     feedback.getId(),
                     feedback.getTaskType().getName(),

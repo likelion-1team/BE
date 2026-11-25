@@ -382,7 +382,13 @@ class SharedFeedbackControllerIntegrationTest {
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.message").value("공유 설정 변경 성공"))
                 .andExpect(jsonPath("$.data.isShared").value(true));
-        entityManager.find(Feedback.class, feedback.getId()).addToGuide();
+        mockMvc.perform(put("/api/v1/feedbacks/{feedbackId}/guide", feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.leader().getId())))
+                .andExpect(status().isOk());
+        assertThat(jdbc.queryForObject("""
+                select count(*) from guides g join shared_cases c on c.id = g.shared_case_id
+                where c.feedback_id = ? and c.status = 'ACTIVE'
+                """, Integer.class, feedback.getId())).isEqualTo(1);
         share(feedback.getId(), fixture.member(), approval)
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("INVALID_STATE"));
@@ -399,6 +405,12 @@ class SharedFeedbackControllerIntegrationTest {
         Feedback revoked = entityManager.find(Feedback.class, feedback.getId());
         assertThat(revoked.getIsGuide()).isFalse();
         assertThat(revoked.getSharedAt()).isNull();
+        assertThat(jdbc.queryForObject("select status from shared_cases where feedback_id = ?",
+                String.class, feedback.getId())).isEqualTo("REVOKED");
+        assertThat(jdbc.queryForObject("""
+                select count(*) from guides g join shared_cases c on c.id = g.shared_case_id
+                where c.feedback_id = ?
+                """, Integer.class, feedback.getId())).isZero();
         assertThat(revoked.getGuideAddedAt()).isNull();
         request(SHARED_CASES, teamId, fixture.leader()).andExpect(jsonPath("$.data.items").isEmpty());
         request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.groups").isEmpty());
