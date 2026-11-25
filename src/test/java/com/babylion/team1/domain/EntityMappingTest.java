@@ -51,7 +51,8 @@ class EntityMappingTest {
 		em.persist(TeamMember.leader(team, leader));
 		TeamSettings settings = TeamSettings.createDefault(team);
 		em.persist(settings);
-		TeamTaskType taskType = TeamTaskType.builder().team(team).name("주간 보고서 작성").successDefinition("수정 없이 제출").build();
+		TeamTaskType taskType = TeamTaskType.builder().team(team).name("주간 보고서 작성").successConditions(List.of("수정 없이 제출"))
+				.failureConditions(List.of()).unknownConditions(List.of()).build();
 		em.persist(taskType);
 
 		Upload upload = Upload.builder().team(team).uploader(leader).fileName("conversations.json").conversationCount(3).build();
@@ -107,7 +108,8 @@ class EntityMappingTest {
 		em.persist(team);
 		TeamSettings settings = TeamSettings.createDefault(team);
 		em.persist(settings);
-		TeamTaskType taskType = TeamTaskType.builder().team(team).name("보고서").successDefinition("완료").build();
+		TeamTaskType taskType = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("완료"))
+				.failureConditions(List.of()).unknownConditions(List.of()).build();
 		em.persist(taskType);
 		Upload upload = Upload.builder().team(team).uploader(owner).fileName("analysis.json").conversationCount(1).build();
 		em.persist(upload);

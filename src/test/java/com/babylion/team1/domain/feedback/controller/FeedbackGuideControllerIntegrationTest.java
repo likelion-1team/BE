@@ -347,7 +347,8 @@ class FeedbackGuideControllerIntegrationTest {
         entityManager.persist(team);
         entityManager.persist(TeamMember.leader(team, leader));
         entityManager.persist(TeamMember.member(team, owner));
-        TeamTaskType type = TeamTaskType.builder().team(team).name("주간 보고서").successDefinition("검토 통과").build();
+        TeamTaskType type = TeamTaskType.builder().team(team).name("주간 보고서").successConditions(List.of("검토 통과"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(type);
         Upload upload = Upload.builder().team(team).uploader(owner).fileName("conversations.json").conversationCount(1)
                 .build();

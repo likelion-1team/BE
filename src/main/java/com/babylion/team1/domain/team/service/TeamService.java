@@ -16,30 +16,24 @@ import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Cont
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository.MyFeedbackRow;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
-import com.babylion.team1.domain.team.dto.request.TeamSettingsUpdateRequest;
 import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
 import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
-import com.babylion.team1.domain.team.dto.response.TeamSettingsResponse;
-import com.babylion.team1.domain.team.dto.response.TeamSettingsUpdateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamGoal;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
-import com.babylion.team1.domain.team.entity.TeamTaskType;
 import com.babylion.team1.domain.team.repository.TeamGoalRepository;
 import com.babylion.team1.domain.team.repository.TeamMemberRepository;
 import com.babylion.team1.domain.team.repository.TeamRepository;
 import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
-import com.babylion.team1.domain.team.repository.TeamTaskTypeRepository;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
 import java.time.LocalDate;
-import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
@@ -66,7 +60,6 @@ public class TeamService {
     private final TeamMemberRepository teamMemberRepository;
     private final TeamGoalRepository teamGoalRepository;
     private final TeamSettingsRepository teamSettingsRepository;
-    private final TeamTaskTypeRepository teamTaskTypeRepository;
     private final FeedbackRepository feedbackRepository;
     private final SharedCaseRepository sharedCases;
     private final GuideRepository guides;
@@ -235,66 +228,6 @@ public class TeamService {
     private Feedback lockFeedback(Long feedbackId) {
         return feedbackRepository.findByIdForUpdate(feedbackId)
                 .orElseThrow(() -> new CustomException(ErrorCode.FEEDBACK_NOT_FOUND));
-    }
-
-    @Transactional(readOnly = true)
-    public TeamSettingsResponse getSettings(Long teamId, Long userId) {
-        Team team = findTeam(teamId);
-        requireTeamMember(teamId, userId);
-        TeamSettings settings = teamSettingsRepository.findByTeamId(teamId)
-                .orElseGet(() -> TeamSettings.createDefault(team));
-        return TeamSettingsResponse.from(settings, teamTaskTypeRepository.findByTeamIdAndIsActiveTrueOrderById(teamId));
-    }
-
-    @Transactional
-    public TeamSettingsUpdateResponse updateSettings(Long teamId, Long userId, TeamSettingsUpdateRequest request) {
-        // Serialize settings writes for this team, including activation and first-time creation.
-        Team team = teamRepository.findByIdForUpdate(teamId)
-                .orElseThrow(() -> new CustomException(ErrorCode.TEAM_NOT_FOUND));
-        requireTeamLeader(teamId, userId);
-
-        LocalDate targetFrom = parseTargetDate(request.targetFrom());
-        LocalDate targetTo = parseTargetDate(request.targetTo());
-        LocalDate onboardingStartDate = parseTargetDate(request.onboardingStartDate());
-        if (targetFrom.isAfter(targetTo)
-                || onboardingStartDate.isBefore(targetFrom) || onboardingStartDate.isAfter(targetTo)) {
-            throw new CustomException(ErrorCode.INVALID_REQUEST);
-        }
-
-        activateTaskType(team, request.taskTypes().get(0));
-        TeamSettings settings = teamSettingsRepository.findByTeamId(teamId)
-                .orElseGet(() -> TeamSettings.createDefault(team));
-        Integer targetCount = request.targetCount() == null ? null : request.targetCount().intValueExact();
-        TeamSettings next = settings.nextVersion(targetFrom, targetTo, onboardingStartDate, targetCount);
-        teamSettingsRepository.save(next);
-        return new TeamSettingsUpdateResponse(next.updatedAtInKst());
-    }
-
-    private void activateTaskType(Team team, TeamSettingsUpdateRequest.TaskType request) {
-        Long teamId = team.getId();
-        TeamTaskType selected = teamTaskTypeRepository.findByTeamIdAndName(teamId, request.name())
-                .orElseGet(() -> TeamTaskType.builder()
-                        .team(team)
-                        .name(request.name())
-                        .successDefinition(request.successDefinition())
-                        .build());
-        teamTaskTypeRepository.findByTeamIdAndIsActiveTrueOrderById(teamId).stream()
-                .filter(active -> !Objects.equals(active.getId(), selected.getId()))
-                .forEach(TeamTaskType::deactivate);
-        selected.update(request.name(), request.successDefinition());
-        selected.activate();
-        teamTaskTypeRepository.save(selected);
-    }
-
-    private LocalDate parseTargetDate(String value) {
-        if (value.length() != 10 || value.startsWith("0000-")) {
-            throw new CustomException(ErrorCode.INVALID_REQUEST);
-        }
-        try {
-            return LocalDate.parse(value);
-        } catch (DateTimeParseException exception) {
-            throw new CustomException(ErrorCode.INVALID_REQUEST);
-        }
     }
 
     private Team findTeam(Long teamId) {

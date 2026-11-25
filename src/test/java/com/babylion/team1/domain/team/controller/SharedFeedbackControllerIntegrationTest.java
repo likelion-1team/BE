@@ -644,7 +644,8 @@ class SharedFeedbackControllerIntegrationTest {
     }
 
     private TeamTaskType saveTaskType(Team team, String name) {
-        TeamTaskType task = TeamTaskType.builder().team(team).name(name).successDefinition("검토 통과").build();
+        TeamTaskType task = TeamTaskType.builder().team(team).name(name).successConditions(List.of("검토 통과"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(task);
         return task;
     }

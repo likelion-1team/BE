@@ -26,6 +26,7 @@ import com.babylion.team1.domain.upload.repository.UploadRepository;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
+import com.babylion.team1.global.policy.ServerPolicy;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import java.nio.charset.StandardCharsets;
@@ -133,7 +134,8 @@ public class AnalysisStartService {
             throw new CustomException(ErrorCode.UPLOAD_CONSUMED);
         }
         var file = storage.pathFor(uploadId);
-        if (!Files.isRegularFile(file) || !upload.getUploadedAt().plusHours(1).isAfter(LocalDateTime.now())) {
+        if (!Files.isRegularFile(file) || !upload.getUploadedAt()
+                .plusMinutes(ServerPolicy.UPLOAD_RETENTION_MINUTES).isAfter(LocalDateTime.now())) {
             throw new CustomException(ErrorCode.UPLOAD_EXPIRED);
         }
         var current = settings.findByTeamId(teamId).orElseThrow(() -> new CustomException(ErrorCode.VERSION_CONFLICT));
@@ -230,7 +232,8 @@ public class AnalysisStartService {
 
     private static LinkedHashMap<String, Long> validateSelections(AnalysisStartRequest request) {
         if (request.settingsVersion() == null || request.settingsVersion() < 0 || request.selections() == null
-                || request.selections().isEmpty() || request.selections().size() > 100) {
+                || request.selections().isEmpty()
+                || request.selections().size() > ServerPolicy.MAX_SELECTIONS_PER_REQUEST) {
             throw new CustomException(ErrorCode.VALIDATION_FAILED);
         }
         var selections = new LinkedHashMap<String, Long>();

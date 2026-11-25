@@ -60,10 +60,10 @@ public class AnalysisItem {
     @JoinColumn(name = "task_type_id", nullable = false)
     private TeamTaskType taskType;
 
-    @Column(name = "task_name_snapshot", length = 50)
+    @Column(name = "task_name_snapshot", length = 200)
     private String taskNameSnapshot;
 
-    @Column(name = "success_definition_snapshot", length = 500)
+    @Column(name = "success_definition_snapshot", columnDefinition = "TEXT")
     private String successDefinitionSnapshot;
 
     @Column(name = "conversation_date", nullable = false)
