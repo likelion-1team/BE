@@ -22,9 +22,10 @@ public record MyTeamResponse(
             boolean canManageMembers,
             boolean canManageSharedCases
     ) {
+        /** 개인 성과와 팀 성과는 팀원도 조회할 수 있고, 나머지는 팀장만 할 수 있다 */
         private static Capabilities forRole(TeamRole role) {
             boolean leader = role == TeamRole.LEADER;
-            return new Capabilities(true, leader, leader, leader, leader, leader);
+            return new Capabilities(true, true, leader, leader, leader, leader);
         }
     }
 }
