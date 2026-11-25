@@ -65,34 +65,4 @@ public interface FeedbackRepository extends JpaRepository<Feedback, Long> {
         String getReaction();
         String getSharingStatus();
     }
-
-    @Query("""
-            select f from Feedback f
-            join fetch f.taskType task
-            where f.team.id = :teamId and (
-                exists (select 1 from SharedCase s where s.feedback = f and s.status = ACTIVE)
-                or (f.isShared = true and not exists (select 1 from SharedCase s where s.feedback = f))
-            )
-              and (:taskTypeId is null or task.id = :taskTypeId)
-              and (:type is null or f.type = :type or f.type = :alternateType)
-            order by f.sharedAt desc, f.id desc
-            """)
-    List<Feedback> findSharedCases(@Param("teamId") Long teamId,
-                                   @Param("taskTypeId") Long taskTypeId,
-                                   @Param("type") String type,
-                                   @Param("alternateType") String alternateType);
-
-    @Query("""
-            select f from Feedback f
-            where f.team.id = :teamId and (
-                exists (select 1 from Guide g where g.sharedCase.feedback = f and g.sharedCase.status = ACTIVE)
-                or (f.isShared = true and f.isGuide = true
-                    and not exists (select 1 from SharedCase s where s.feedback = f))
-            )
-              and (:type is null or f.type = :type or f.type = :alternateType)
-            order by f.guideAddedAt desc, f.id desc
-            """)
-    List<Feedback> findGuides(@Param("teamId") Long teamId,
-                              @Param("type") String type,
-                              @Param("alternateType") String alternateType);
 }

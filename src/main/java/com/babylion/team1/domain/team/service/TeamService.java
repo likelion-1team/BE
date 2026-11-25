@@ -1,7 +1,6 @@
 package com.babylion.team1.domain.team.service;
 
 import com.babylion.team1.domain.feedback.dto.response.GuideAddResponse;
-import com.babylion.team1.domain.feedback.dto.response.GuidesResponse;
 import com.babylion.team1.domain.feedback.dto.response.MyFeedbackListResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
 import com.babylion.team1.domain.feedback.entity.Feedback;
@@ -11,7 +10,6 @@ import com.babylion.team1.domain.feedback.repository.GuideRepository;
 import com.babylion.team1.domain.feedback.repository.SharedCaseRepository;
 import com.babylion.team1.domain.feedback.entity.SharedCase;
 import com.babylion.team1.domain.feedback.entity.Guide;
-import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Content;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
 import com.babylion.team1.domain.team.dto.response.MyTeamsResponse;
@@ -36,7 +34,6 @@ import com.babylion.team1.domain.user.repository.UserRepository;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
 import java.time.LocalDate;
-import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -147,28 +144,18 @@ public class TeamService {
     }
 
     @Transactional(readOnly = true)
-    public SharedCasesResponse getSharedCases(Long teamId, Long userId, Long taskTypeId, String type) {
-        findTeam(teamId);
-        requireTeamLeader(teamId, userId);
-        var feedbacks = feedbackRepository.findSharedCases(teamId, taskTypeId, type, FeedbackType.alternateValue(type));
-        return SharedCasesResponse.from(feedbacks, approvedSnapshots(feedbacks));
+    public SharedCasesResponse getSharedCases(Long teamId, Long userId, String type, int page, int size) {
+        requireMembershipManager(teamId, userId);
+        return SharedCasesResponse.from(sharedCases.findPublicCases(teamId, type, FeedbackType.alternateValue(type),
+                false, teamPageRequest(page, size)));
     }
 
     @Transactional(readOnly = true)
-    public GuidesResponse getGuides(Long teamId, Long userId, String type) {
-        findTeam(teamId);
-        requireTeamMember(teamId, userId);
-        var feedbacks = feedbackRepository.findGuides(teamId, type, FeedbackType.alternateValue(type));
-        return GuidesResponse.from(feedbacks, approvedSnapshots(feedbacks));
-    }
-
-    private java.util.Map<Long, Content> approvedSnapshots(List<Feedback> feedbacks) {
-        if (feedbacks.isEmpty()) {
-            return java.util.Map.of();
-        }
-        return sharedCases.findByFeedbackIdInAndStatus(feedbacks.stream().map(Feedback::getId).toList(),
-                        SharedCase.Status.ACTIVE).stream()
-                .collect(java.util.stream.Collectors.toMap(row -> row.getFeedback().getId(), SharedCase::getContent));
+    public SharedCasesResponse getGuides(Long teamId, Long userId, String type, int page, int size) {
+        teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        return SharedCasesResponse.from(sharedCases.findPublicCases(teamId, type, FeedbackType.alternateValue(type),
+                true, teamPageRequest(page, size)));
     }
 
     @Transactional
@@ -199,11 +186,6 @@ public class TeamService {
     private Feedback lockFeedback(Long feedbackId) {
         return feedbackRepository.findByIdForUpdate(feedbackId)
                 .orElseThrow(() -> new CustomException(ErrorCode.FEEDBACK_NOT_FOUND));
-    }
-
-    private Team findTeam(Long teamId) {
-        return teamRepository.findById(teamId)
-                .orElseThrow(() -> new CustomException(ErrorCode.TEAM_NOT_FOUND));
     }
 
     private TeamMember requireMembershipManager(Long teamId, Long userId) {
