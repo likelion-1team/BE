@@ -29,15 +29,31 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 		""")
 	List<MyTeamResponse> findMyTeams(@Param("userId") Long userId);
 
+	String V4_SUBMISSION = """
+			item.team = membership.team
+			and item.user = membership.user
+			and item.conversationDate between settings.targetFrom and settings.targetTo
+			and item.status = SUCCEEDED
+			and item.current = true
+			and exists (select 1 from Analysis a where a = item.analysis and a.settings = settings)
+			and exists (select 1 from ConversationVersion v where v = item.version and v.deletedAt is null)
+			""";
+
+	String LEGACY_SUBMISSION = """
+			c.team = membership.team
+			and c.user = membership.user
+			and c.conversationDate between settings.targetFrom and settings.targetTo
+			and c.currentVersion is null
+			and exists (select 1 from Upload u where u = c.upload and u.status = DONE)
+			""";
+
 	@Query("""
 		select new com.babylion.team1.domain.team.dto.response.TeamMemberListResponse(
 			rosterUser.id, rosterUser.name, rosterUser.email, membership.role,
-			case when exists (
-				select 1 from Conversation c
-				where c.team = membership.team
-				  and c.user = rosterUser
-				  and c.conversationDate between settings.targetFrom and settings.targetTo
-				  and c.upload.status = com.babylion.team1.domain.upload.entity.UploadStatus.DONE
+			case when exists (select 1 from AnalysisItem item where
+			""" + V4_SUBMISSION + """
+			) or exists (select 1 from Conversation c where
+			""" + LEGACY_SUBMISSION + """
 			) then true else false end)
 		from TeamMember membership
 		join membership.user rosterUser
@@ -49,16 +65,16 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 
 	@Query("""
 		select new com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse(
-			count(distinct case when completedUpload.status is not null then membership.id else null end),
+			count(distinct case when item.id is not null or c.id is not null then membership.id else null end),
 			count(distinct membership.id),
-			count(completedUpload.status),
+			count(distinct item.id) + count(distinct c.id),
 			settings.targetCount)
 		from TeamMember membership
 		left join TeamSettings settings on settings.team = membership.team and settings.current = true
-		left join Conversation c on c.team = membership.team
-			and c.user = membership.user
-			and c.conversationDate between settings.targetFrom and settings.targetTo
-		left join c.upload completedUpload on completedUpload.status = com.babylion.team1.domain.upload.entity.UploadStatus.DONE
+		left join AnalysisItem item on
+		""" + V4_SUBMISSION + """
+		left join Conversation c on
+		""" + LEGACY_SUBMISSION + """
 		where membership.team.id = :teamId
 		group by settings.targetCount
 		""")
