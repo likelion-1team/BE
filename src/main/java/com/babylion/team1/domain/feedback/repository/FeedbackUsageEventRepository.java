@@ -5,5 +5,8 @@ import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface FeedbackUsageEventRepository extends JpaRepository<FeedbackUsageEvent, Long> {
+    Optional<FeedbackUsageEvent> findFirstByFeedbackIdAndUserIdAndEventTypeOrderByRecordedAtDesc(
+            Long feedbackId, Long userId, FeedbackUsageEvent.Type eventType);
+
     Optional<FeedbackUsageEvent> findByUserIdAndEventId(Long userId, String eventId);
 }

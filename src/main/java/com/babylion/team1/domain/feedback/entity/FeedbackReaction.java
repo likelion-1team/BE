@@ -39,7 +39,7 @@ public class FeedbackReaction {
 	private ReactionType reaction;
 
 	/** 해당 없음 사유(선택) */
-	@Column(name = "reason", length = 200)
+	@Column(name = "reason", length = 500)
 	private String reason;
 
 	@UpdateTimestamp

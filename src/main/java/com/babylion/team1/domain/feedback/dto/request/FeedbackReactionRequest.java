@@ -8,7 +8,7 @@ import jakarta.validation.constraints.Size;
 
 public record FeedbackReactionRequest(
         @NotNull @Pattern(regexp = "HELPFUL|NOT_APPLICABLE") String reaction,
-        @Size(max = 200) String reason
+        @Size(max = 500) String reason
 ) {
     @AssertTrue(message = "해당 없음 반응에만 사유를 입력할 수 있습니다.")
     public boolean isReasonAllowed() {

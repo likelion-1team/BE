@@ -75,6 +75,10 @@ public class Message {
 		this.sourceModel = sourceModel;
 		this.branchPoint = branchPoint;
 	}
+	public String getMessageKey() {
+		return "m_" + idx;
+	}
+
 	public void markRework(boolean rework) {
 		this.isRework = rework;
 	}

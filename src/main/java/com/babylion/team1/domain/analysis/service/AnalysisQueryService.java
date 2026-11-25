@@ -90,7 +90,7 @@ public class AnalysisQueryService {
         return new AnalysisItemsResponse(response, page, size, results.getTotalElements());
     }
 
-    private static AiAssessment assessment(AnalysisItem item) {
+    public static AiAssessment assessment(AnalysisItem item) {
         if (item.getAiOutcome() == null && item.getAiReworkType() == null && item.getAiEvidenceMessageKeys() == null
                 && item.getModelVersion() == null && item.getRubricVersion() == null) {
             return null;
