@@ -20,10 +20,4 @@ public record DatePeriod(LocalDate from, LocalDate to) {
     public long days() {
         return ChronoUnit.DAYS.between(from, to) + 1;
     }
-
-    /** 바로 앞의 같은 길이 기간. 예: 11/01~11/20 -> 10/12~10/31 */
-    public DatePeriod previous() {
-        LocalDate prevTo = from.minusDays(1);
-        return new DatePeriod(prevTo.minusDays(days() - 1), prevTo);
-    }
 }

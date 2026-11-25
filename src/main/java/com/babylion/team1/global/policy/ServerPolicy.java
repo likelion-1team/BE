@@ -9,6 +9,8 @@ import java.math.BigDecimal;
 public final class ServerPolicy {
 
     public static final int VERSION = 1;
+    /** 대시보드 지표 정의 버전. 지표 계산식이 바뀌면 올린다 */
+    public static final int METRIC_DEFINITION_VERSION = 1;
     /** 비율 지표의 최소 분모 */
     public static final int MIN_SAMPLE_SIZE = 20;
     /** 팀 지표를 공개하는 최소 기여 인원 */
