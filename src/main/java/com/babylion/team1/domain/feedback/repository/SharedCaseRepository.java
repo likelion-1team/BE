@@ -11,6 +11,14 @@ import org.springframework.data.jpa.repository.Query;
 public interface SharedCaseRepository extends JpaRepository<SharedCase, Long> {
     Optional<SharedCase> findByFeedbackIdAndStatus(Long feedbackId, SharedCase.Status status);
 
+    @Query("""
+            select sharedCase.feedback.id from SharedCase sharedCase
+            where sharedCase.id = :sharedCaseId and sharedCase.team.id = :teamId
+            """)
+    Optional<Long> findFeedbackId(Long sharedCaseId, Long teamId);
+
+    Optional<SharedCase> findByIdAndTeamId(Long sharedCaseId, Long teamId);
+
     String PUBLIC_CASES = """
             from SharedCase sharedCase
             join sharedCase.feedback feedback
