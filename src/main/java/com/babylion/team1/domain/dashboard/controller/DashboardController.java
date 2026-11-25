@@ -1,6 +1,7 @@
 package com.babylion.team1.domain.dashboard.controller;
 
 import com.babylion.team1.domain.dashboard.dto.request.CostBreakdownRequest;
+import com.babylion.team1.domain.dashboard.dto.request.FilterOptionsRequest;
 import com.babylion.team1.domain.dashboard.dto.request.KpiRequest;
 import com.babylion.team1.domain.dashboard.dto.response.CostBreakdownResponse;
 import com.babylion.team1.domain.dashboard.dto.request.OnboardingEffectRequest;
@@ -12,6 +13,7 @@ import com.babylion.team1.domain.dashboard.dto.response.DayDetailResponse;
 import com.babylion.team1.domain.dashboard.dto.response.FilterOptionsResponse;
 import com.babylion.team1.domain.dashboard.dto.response.KpiResponse;
 import com.babylion.team1.domain.dashboard.dto.response.OnboardingEffectResponse;
+import com.babylion.team1.domain.dashboard.service.DashboardMetricService;
 import com.babylion.team1.domain.dashboard.service.DashboardService;
 import com.babylion.team1.global.response.ApiResponse;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -20,10 +22,12 @@ import lombok.RequiredArgsConstructor;
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -32,15 +36,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class DashboardController {
 
     private final DashboardService dashboardService;
-
-    /** 대시보드 진입 시 필터 목록 준비. 명세상 경로가 /dashboard 밖이라 기본 경로를 /teams/{teamId}로 둔다. */
-    @GetMapping("/filter-options")
-    public ResponseEntity<ApiResponse<FilterOptionsResponse>> getFilterOptions(
-            @PathVariable Long teamId,
-            @AuthenticationPrincipal Long userId) {
-        FilterOptionsResponse response = dashboardService.getFilterOptions(teamId, userId);
-        return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
-    }
+    private final DashboardMetricService dashboardMetricService;
 
     /**
      * 차트에서 클릭한 날짜의 상세. 팀원은 그날 본인 대화 목록, 팀장은 그날 업무 유형별 건수·지표 + 본인 대화 목록.
@@ -58,14 +54,28 @@ public class DashboardController {
 
     /**
      * principal은 JwtAuthenticationFilter가 넣어 둔 userId(Long)이다.
-     * @ParameterObject: Swagger에서 request를 JSON 하나가 아니라 from·to·unit·taskTypes·models 개별 쿼리 파라미터로 보여준다.
+     * @ParameterObject: Swagger에서 request를 JSON 하나가 아니라 개별 쿼리 파라미터로 보여준다.
+     * parameters: 지원하지 않는 쿼리 파라미터를 422로 거부하기 위해 이름을 확인하는 용도다.
      */
+    @GetMapping("/dashboard/filter-options")
+    public ResponseEntity<ApiResponse<FilterOptionsResponse>> getFilterOptions(
+            @PathVariable Long teamId,
+            @AuthenticationPrincipal Long userId,
+            @ParameterObject @ModelAttribute FilterOptionsRequest request,
+            @Parameter(hidden = true) @RequestParam MultiValueMap<String, String> parameters) {
+        FilterOptionsResponse response =
+                dashboardMetricService.getFilterOptions(teamId, userId, request, parameters.keySet());
+        return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
+    }
+
     @GetMapping("/dashboard/kpis")
     public ResponseEntity<ApiResponse<KpiResponse>> getKpis(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
-            @ParameterObject @ModelAttribute KpiRequest request) {
-        KpiResponse response = dashboardService.getKpis(teamId, userId, request);
+            @ParameterObject @ModelAttribute KpiRequest request,
+            @Parameter(hidden = true) @RequestParam MultiValueMap<String, String> parameters) {
+        KpiResponse response =
+                dashboardMetricService.getKpis(teamId, userId, request, parameters.keySet());
         return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
     }
 
@@ -73,8 +83,10 @@ public class DashboardController {
     public ResponseEntity<ApiResponse<TrendResponse>> getTrends(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
-            @ParameterObject @ModelAttribute TrendRequest request) {
-        TrendResponse response = dashboardService.getTrends(teamId, userId, request);
+            @ParameterObject @ModelAttribute TrendRequest request,
+            @Parameter(hidden = true) @RequestParam MultiValueMap<String, String> parameters) {
+        TrendResponse response =
+                dashboardMetricService.getTrends(teamId, userId, request, parameters.keySet());
         return ResponseEntity.ok(ApiResponse.success("S200", "조회 성공", response));
     }
 

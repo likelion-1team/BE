@@ -20,10 +20,6 @@ record DashboardContext(
         Optional<TeamSettings> settings
 ) {
 
-    boolean isTeamScope() {
-        return scopeUserId == null;
-    }
-
     KpiCondition condition(List<Long> taskTypeIds, List<String> models) {
         return new KpiCondition(teamId, scopeUserId, taskTypeIds, models);
     }
@@ -50,16 +46,7 @@ record DashboardContext(
                 .orElse(TeamSettings.DEFAULT_HOURLY_LABOR_COST);
     }
 
-    int minDailyConversations() {
-        return settings.map(TeamSettings::getMinDailyConversations)
-                .orElse(TeamSettings.DEFAULT_MIN_DAILY_CONVERSATIONS);
-    }
-
     LocalDate onboardingStartDate() {
         return settings.map(TeamSettings::getOnboardingStartDate).orElse(null);
-    }
-
-    Integer targetCount() {
-        return settings.map(TeamSettings::getTargetCount).orElse(null);
     }
 }

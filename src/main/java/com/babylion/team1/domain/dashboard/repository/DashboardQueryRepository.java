@@ -1,7 +1,6 @@
 package com.babylion.team1.domain.dashboard.repository;
 
 import com.babylion.team1.domain.dashboard.dto.ConversationAggregate;
-import com.babylion.team1.domain.dashboard.dto.ConversationDateRange;
 import com.babylion.team1.domain.dashboard.dto.CostRow;
 import com.babylion.team1.domain.dashboard.dto.DatePeriod;
 import com.babylion.team1.domain.dashboard.dto.KpiCondition;
@@ -16,7 +15,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
@@ -32,19 +30,23 @@ public class DashboardQueryRepository {
 
     private final EntityManager em;
 
-    /** ConversationAggregate 필드 순서와 같다. 0~7번 컬럼 */
+    /**
+     * 분석이 끝난 대화만 남기는 조인과 조건. 분석 전·실패·삭제된 대화를 제외한다.
+     * v4 대화는 분석에 성공해야 현행 버전이 생기고, v3 대화는 버전 없이 업로드가 DONE이다.
+     */
+    private static final String ANALYZED_JOIN = " join c.upload u left join c.currentVersion cv ";
+    private static final String ANALYZED_CONDITION =
+            " and ((cv.id is null and u.status = DONE) or (cv.id is not null and cv.deletedAt is null)) ";
+
+    /** ConversationAggregate 필드 순서와 같다. 0~3번 컬럼 */
     private static final String AGGREGATE_COLUMNS = """
             count(c),
             sum(case when c.isSuccess = true then 1 else 0 end),
             sum(case when c.hasRework = true then 1 else 0 end),
-            sum(c.estimatedTokens),
-            sum(c.estimatedCost),
-            sum(c.reviewTimeSec),
-            sum(c.reworkTimeSec),
-            count(distinct c.user.id)
+            sum(c.estimatedTokens)
             """;
     /** AGGREGATE_COLUMNS 뒤에 붙인 컬럼(그룹 키)이 시작하는 위치 */
-    private static final int AFTER_AGGREGATE = 8;
+    private static final int AFTER_AGGREGATE = 4;
 
     /** 기간 전체를 하나로 집계한다 */
     public ConversationAggregate aggregateConversations(KpiCondition condition, DatePeriod period) {
@@ -52,23 +54,6 @@ public class DashboardQueryRepository {
         TypedQuery<Object[]> query = em.createQuery(jpql, Object[].class);
         bindConversation(query, condition, period);
         return toAggregate(query.getSingleResult());
-    }
-
-    /**
-     * conversation_date별로 집계한다. 대화가 있는 날만 담기며, 날짜 오름차순이다.
-     * 주 단위 묶음은 DB 함수에 의존하지 않도록 서비스에서 날짜별 결과를 합쳐서 만든다.
-     */
-    public Map<LocalDate, ConversationAggregate> aggregateConversationsByDate(KpiCondition condition, DatePeriod period) {
-        String jpql = "select " + AGGREGATE_COLUMNS + ", c.conversationDate " + conversationWhere(condition)
-                + " group by c.conversationDate";
-        TypedQuery<Object[]> query = em.createQuery(jpql, Object[].class);
-        bindConversation(query, condition, period);
-
-        Map<LocalDate, ConversationAggregate> result = new TreeMap<>();
-        for (Object[] row : query.getResultList()) {
-            result.put((LocalDate) row[AFTER_AGGREGATE], toAggregate(row));
-        }
-        return result;
     }
 
     /**
@@ -122,18 +107,6 @@ public class DashboardQueryRepository {
     }
 
     /**
-     * 같은 기간(feedback_date 기준) 피드백의 예상 절감액 합.
-     * feedbacks에는 모델 정보가 없어 models 필터는 적용하지 않는다.
-     */
-    public BigDecimal sumExpectedSavingCost(KpiCondition condition, DatePeriod period) {
-        String jpql = "select sum(f.expectedSavingCost)" + feedbackWhere(condition);
-        TypedQuery<BigDecimal> query = em.createQuery(jpql, BigDecimal.class);
-        bindCommon(query, condition, period);
-        BigDecimal sum = query.getSingleResult();
-        return sum != null ? sum : BigDecimal.ZERO;
-    }
-
-    /**
      * 업무 유형별로 가장 많이 나온 피드백 유형을 최대 limit개씩 돌려준다(key: 업무 유형 id).
      * 같은 기간(feedback_date 기준) 피드백 건수가 많은 순, 건수가 같으면 유형 이름순이다.
      * feedbacks에는 모델 정보가 없어 models 필터는 적용하지 않는다.
@@ -160,11 +133,11 @@ public class DashboardQueryRepository {
                 (c.id, c.title, c.startedAt, c.model, t.name,
                        c.turnCount, c.estimatedTokens, c.isSuccess, c.hasRework)
                 from Conversation c join c.taskType t
+                """ + ANALYZED_JOIN + """
                 where c.team.id = :teamId
                   and c.user.id = :userId
                   and c.conversationDate = :date
-                order by c.startedAt, c.id
-                """;
+                """ + ANALYZED_CONDITION + " order by c.startedAt, c.id";
         return em.createQuery(jpql, DayConversationItem.class)
                 .setParameter("teamId", teamId)
                 .setParameter("userId", userId)
@@ -172,39 +145,13 @@ public class DashboardQueryRepository {
                 .getResultList();
     }
 
-    /** 대화에 등장한 업무 유형(id 오름차순). userId가 null이면 팀 전체 */
-    public List<TaskTypeOption> findConversationTaskTypes(Long teamId, Long userId) {
-        String jpql = "select distinct new " + TaskTypeOption.class.getName() + "(t.id, t.name)"
-                + " from Conversation c join c.taskType t" + scopeWhere(userId) + " order by t.id";
-        TypedQuery<TaskTypeOption> query = em.createQuery(jpql, TaskTypeOption.class);
-        bindScope(query, teamId, userId);
-        return query.getResultList();
-    }
-
-    /** 대화에 등장한 모델(NULL 제외, 이름 오름차순). userId가 null이면 팀 전체 */
-    public List<String> findConversationModels(Long teamId, Long userId) {
-        String jpql = "select distinct c.model from Conversation c"
-                + scopeWhere(userId) + " and c.model is not null order by c.model";
-        TypedQuery<String> query = em.createQuery(jpql, String.class);
-        bindScope(query, teamId, userId);
-        return query.getResultList();
-    }
-
-    /** 대화가 있는 첫날·마지막 날. 대화가 없으면 둘 다 null */
-    public ConversationDateRange findConversationDateRange(Long teamId, Long userId) {
-        String jpql = "select new " + ConversationDateRange.class.getName()
-                + "(min(c.conversationDate), max(c.conversationDate)) from Conversation c" + scopeWhere(userId);
-        TypedQuery<ConversationDateRange> query = em.createQuery(jpql, ConversationDateRange.class);
-        bindScope(query, teamId, userId);
-        return query.getSingleResult();
-    }
-
     private String conversationWhere(KpiCondition condition) {
         StringBuilder jpql = new StringBuilder("""
                  from Conversation c
+                """ + ANALYZED_JOIN + """
                 where c.team.id = :teamId
                   and c.conversationDate between :from and :to
-                """);
+                """ + ANALYZED_CONDITION);
         if (condition.userId() != null) {
             jpql.append(" and c.user.id = :userId");
         }
@@ -249,22 +196,7 @@ public class DashboardQueryRepository {
                 conversationCount,
                 toLong(row[1]),
                 toLong(row[2]),
-                toLong(row[3]),
-                toBigDecimal(row[4]),
-                toLong(row[5]),
-                toLong(row[6]),
-                toLong(row[7]));
-    }
-
-    private String scopeWhere(Long userId) {
-        return " where c.team.id = :teamId" + (userId != null ? " and c.user.id = :userId" : "");
-    }
-
-    private void bindScope(TypedQuery<?> query, Long teamId, Long userId) {
-        query.setParameter("teamId", teamId);
-        if (userId != null) {
-            query.setParameter("userId", userId);
-        }
+                toLong(row[3]));
     }
 
     private void bindCommon(TypedQuery<?> query, KpiCondition condition, DatePeriod period) {
