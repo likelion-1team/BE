@@ -40,8 +40,6 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 			and exists (select 1 from ConversationVersion v where v = item.version and v.deletedAt is null)
 			""";
 
-	String V4_SUBMISSION = V4_SELECTION + " and item.status = SUCCEEDED and item.current = true";
-
 	String LEGACY_SUBMISSION = """
 			c.team = membership.team
 			and c.user = membership.user
@@ -54,7 +52,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 		select new com.babylion.team1.domain.team.dto.response.TeamMemberListResponse(
 			rosterUser.id, rosterUser.name, rosterUser.email, membership.role,
 			case when exists (select 1 from AnalysisItem item where
-			""" + V4_SUBMISSION + """
+			""" + V4_SELECTION + """
 			) or exists (select 1 from Conversation c where
 			""" + LEGACY_SUBMISSION + """
 			) then true else false end)

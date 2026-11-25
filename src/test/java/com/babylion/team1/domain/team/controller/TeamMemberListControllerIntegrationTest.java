@@ -311,10 +311,10 @@ class TeamMemberListControllerIntegrationTest {
     }
 
     @Test
-    void countsOnlySuccessfulCurrentAnalysisItemsFromConsumedUploads() throws Exception {
+    void countsConfirmedSelectionsAsSubmittedAndOnlyCurrentSuccessesAsAnalyzed() throws Exception {
         TeamFixture fixture = createTeam(saveUser("팀장"));
         User member = addMember(fixture, "성공 팀원");
-        User pending = addMember(fixture, "미제출 팀원");
+        User pending = addMember(fixture, "선택을 확정한 팀원");
         TeamSettings previous = saveNextSettings(saveInitialSettings(fixture.team()), FROM, TO, 100);
         TeamSettings current = saveNextSettings(previous, FROM, TO, 200);
 
@@ -331,7 +331,7 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.length()").value(3))
                 .andExpect(jsonPath("$.data[0].submitted").value(false))
                 .andExpect(jsonPath("$.data[1].submitted").value(true))
-                .andExpect(jsonPath("$.data[2].submitted").value(false));
+                .andExpect(jsonPath("$.data[2].submitted").value(true));
         submissions(fixture.team().getId(), fixture.leader()).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.submittedMembers").value(2))
                 .andExpect(jsonPath("$.data.totalMembers").value(3))
