@@ -4,6 +4,7 @@ import com.babylion.team1.domain.upload.entity.Upload;
 import jakarta.persistence.*;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -76,5 +77,18 @@ public class ConversationVersion {
 
     public void recordEstimatedTokens(int tokens) {
         estimatedTokens = tokens;
+    }
+
+    /** 삭제 요청 즉시 조회·집계에서 제외한다 */
+    public void markDeleted(Instant now) {
+        if (deletedAt == null) {
+            deletedAt = now.truncatedTo(ChronoUnit.MICROS);
+        }
+    }
+
+    /** 원문에서 온 값을 지우고 메타데이터만 남긴다 */
+    public void eraseContent() {
+        title = null;
+        excludedAttachments = null;
     }
 }

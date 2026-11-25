@@ -7,6 +7,7 @@ import com.babylion.team1.domain.dashboard.dto.KpiCondition;
 import com.babylion.team1.domain.dashboard.dto.request.CostGroupBy;
 import com.babylion.team1.domain.dashboard.dto.response.DayConversationItem;
 import com.babylion.team1.domain.dashboard.dto.response.TaskTypeOption;
+import com.babylion.team1.domain.feedback.repository.FeedbackEvidenceRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.TypedQuery;
 import java.math.BigDecimal;
@@ -164,13 +165,16 @@ public class DashboardQueryRepository {
         return jpql.toString();
     }
 
-    /** feedbacks에는 모델 정보가 없어 models 조건은 넣지 않는다. 바인딩은 bindCommon */
+    /** 근거 원문이 삭제된 피드백은 제외한다. feedbacks에는 모델 정보가 없어 models 조건은 넣지 않는다. 바인딩은 bindCommon */
     private String feedbackWhere(KpiCondition condition) {
         StringBuilder jpql = new StringBuilder("""
                  from Feedback f
                 where f.team.id = :teamId
                   and f.feedbackDate between :from and :to
-                """);
+                  and not exists (
+                      select 1 from FeedbackEvidence e left join e.conversation.currentVersion currentVersion
+                      where e.feedback = f and
+                """ + FeedbackEvidenceRepository.DELETED_ORIGINAL + ")");
         if (condition.userId() != null) {
             jpql.append(" and f.user.id = :userId");
         }

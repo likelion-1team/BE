@@ -3,6 +3,7 @@ package com.babylion.team1.domain.conversation.repository;
 import com.babylion.team1.domain.conversation.entity.Message;
 import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
 public interface MessageRepository extends JpaRepository<Message, Long> {
@@ -16,4 +17,8 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
             order by m.idx asc
             """)
     List<Message> findLegacyMessagesOrdered(Long conversationId);
+
+    @Modifying
+    @Query("delete from Message m where m.version.id = :versionId")
+    void deleteByVersionId(Long versionId);
 }

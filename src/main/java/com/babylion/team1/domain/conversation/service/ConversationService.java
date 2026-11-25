@@ -37,7 +37,9 @@ public class ConversationService {
             var evidence = evidenceRepository.findByFeedbackIdAndConversationIdAndFeedbackUserId(
                     highlightFeedbackId, conversationId, userId);
             if (evidence.isEmpty()) {
-                throw new CustomException(ErrorCode.VALIDATION_FAILED);
+                // 원문을 삭제하면 피드백도 지워지므로, 피드백이 없다는 안내보다 삭제 안내를 먼저 한다.
+                throw new CustomException(currentVersion != null && currentVersion.getDeletedAt() != null
+                        ? ErrorCode.SOURCE_DELETED : ErrorCode.VALIDATION_FAILED);
             }
             var item = items.findForFeedback(evidence.get(0).getFeedback().getUpload().getId(), conversationId);
             if (item.isEmpty() && currentVersion != null && currentVersion.getDeletedAt() != null) {

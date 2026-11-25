@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
 public interface OutcomeAssessmentRepository extends JpaRepository<OutcomeAssessment, Long> {
@@ -15,4 +16,11 @@ public interface OutcomeAssessmentRepository extends JpaRepository<OutcomeAssess
             and a.version = (select max(current.version) from OutcomeAssessment current where current.item.id = a.item.id)
             """)
     List<OutcomeAssessment> findLatestByItemIds(Collection<Long> itemIds);
+
+    @Modifying
+    @Query("""
+            update OutcomeAssessment a set a.note = null
+            where a.item.id in (select i.id from AnalysisItem i where i.version.id = :versionId)
+            """)
+    void clearNotesByVersionId(Long versionId);
 }
