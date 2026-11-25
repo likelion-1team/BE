@@ -1,6 +1,5 @@
 package com.babylion.team1.domain.team.controller;
 
-import com.babylion.team1.domain.feedback.dto.request.MyFeedbackSort;
 import com.babylion.team1.domain.feedback.dto.response.GuidesResponse;
 import com.babylion.team1.domain.feedback.dto.response.MyFeedbackListResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
@@ -90,19 +89,19 @@ public class TeamController {
         return ApiResponse.success("S200", "조회 성공", teamService.getTeamSubmissions(teamId, userId));
     }
 
-    @Operation(summary = "내 피드백 목록 조회",
-            description = "날짜 그룹은 최신순으로 한 페이지에 20개씩 반환합니다. sort는 각 그룹 안에 적용합니다.")
+    @Operation(summary = "내 피드백 목록 조회")
     @GetMapping("/{teamId}/feedbacks")
     public ApiResponse<MyFeedbackListResponse> getMyFeedbacks(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-            @RequestParam(required = false) List<String> types,
-            @RequestParam(defaultValue = "LATEST") MyFeedbackSort sort,
-            @RequestParam(defaultValue = "0") int page) {
+            @RequestParam(required = false) String type,
+            @RequestParam(defaultValue = "LATEST") String sort,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.success("S200", "조회 성공",
-                teamService.getMyFeedbacks(teamId, userId, from, to, types, sort, page));
+                teamService.getMyFeedbacks(teamId, userId, from, to, type, sort, page, size));
     }
 
     @Operation(summary = "공유 사례 목록 조회")

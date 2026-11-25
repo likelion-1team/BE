@@ -47,6 +47,8 @@ public enum ErrorCode {
     LEADER_ONLY(HttpStatus.FORBIDDEN, "LEADER_ONLY", "팀장만 사용할 수 있는 기능입니다."),
     ROLE_FORBIDDEN(HttpStatus.FORBIDDEN, "ROLE_FORBIDDEN", "이 기능을 사용할 권한이 없습니다."),
     INVALID_STATE(HttpStatus.CONFLICT, "INVALID_STATE", "현재 상태에서는 처리할 수 없습니다."),
+    SOURCE_DELETED(HttpStatus.GONE, "SOURCE_DELETED", "원문이 삭제되었습니다."),
+    PREVIEW_EXPIRED(HttpStatus.GONE, "PREVIEW_EXPIRED", "공유 미리보기가 만료되었습니다."),
     VERSION_CONFLICT(HttpStatus.CONFLICT, "VERSION_CONFLICT", "저장된 버전이 변경되었습니다. 최신 값을 확인해 주세요."),
     TEAM_NOT_FOUND(HttpStatus.NOT_FOUND, "TEAM_NOT_FOUND", "팀을 찾을 수 없습니다."),
     ALREADY_MEMBER(HttpStatus.CONFLICT, "ALREADY_MEMBER", "이미 팀 멤버입니다."),

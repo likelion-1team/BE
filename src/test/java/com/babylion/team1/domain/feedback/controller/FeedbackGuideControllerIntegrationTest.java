@@ -198,7 +198,7 @@ class FeedbackGuideControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"shared\":false}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.isShared").value(false));
+                .andExpect(jsonPath("$.data.shared").value(false));
 
         remove(fixture.feedbackId(), fixture.leaderId())
                 .andExpect(status().isNoContent())
