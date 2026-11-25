@@ -94,6 +94,7 @@ class UploadControllerIntegrationTest {
 
         TeamSettings settings = TeamSettings.createDefault(team);
         settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        ReflectionTestUtils.setField(settings, "version", 1);
         entityManager.persist(settings);
 
         String sameTeamId = UUID.randomUUID().toString();
@@ -113,15 +114,14 @@ class UploadControllerIntegrationTest {
         MockMultipartFile file = new MockMultipartFile(
                 "file", "conversations.json", "application/json", original.getBytes(StandardCharsets.UTF_8));
 
-        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", team.getId())
+        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", team.getId()).param("settingsVersion", "1")
                         .file(file)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(uploader.getId())))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.uploadId").isNumber())
-                .andExpect(jsonPath("$.data.conversations[0].externalId").value(sameTeamId))
-                .andExpect(jsonPath("$.data.conversations[0].isDuplicate").value(true))
-                .andExpect(jsonPath("$.data.conversations[1].externalId").value(otherTeamId))
-                .andExpect(jsonPath("$.data.conversations[1].isDuplicate").value(false));
+                .andExpect(jsonPath("$.data.conversationCount").value(2))
+                .andExpect(jsonPath("$.data.eligibleConversationCount").value(2))
+                .andExpect(jsonPath("$.data.conversations").doesNotExist());
 
         var row = jdbc.queryForMap("""
                 select id, conversation_count, duplicate_count, status
@@ -232,6 +232,7 @@ class UploadControllerIntegrationTest {
         Team team = saveTeam(uploader, "분석 테스트 팀");
         var settings = TeamSettings.createDefault(team);
         settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        ReflectionTestUtils.setField(settings, "version", 1);
         entityManager.persist(settings);
         var type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
                 .failureConditions(List.of()).unknownConditions(List.of()).build();
@@ -252,7 +253,7 @@ class UploadControllerIntegrationTest {
                 }}]
                 """.formatted(externalId, epoch, epoch, epoch + 1);
         String bearer = "Bearer " + accessTokens.create(userId);
-        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId).param("settingsVersion", "1")
                         .file(new MockMultipartFile("file", "conversations.json", "application/json",
                                 export.getBytes(StandardCharsets.UTF_8)))
                         .header(HttpHeaders.AUTHORIZATION, bearer))
@@ -276,13 +277,13 @@ class UploadControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.total").value(1));
         String key = UUID.randomUUID().toString();
         String body = """
-                {"settingsVersion":0,"selections":[{"selectionId":"%s","taskTypeId":%d}]}
+                {"settingsVersion":1,"selections":[{"selectionId":"%s","taskTypeId":%d}]}
                 """.formatted(selectionId, typeId);
         var request = post("/api/v1/uploads/{uploadId}/analyses", uploadId)
                 .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
                 .header("Idempotency-Key", key);
         if (!commit) {
-            mockMvc.perform(request.content(body.replace(":0,", ":1,")))
+            mockMvc.perform(request.content(body.replace("\"settingsVersion\":1", "\"settingsVersion\":2")))
                     .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
         }
         mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
@@ -332,7 +333,7 @@ class UploadControllerIntegrationTest {
         mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.analysisId").value(analysisId));
         if (!commit) {
-            mockMvc.perform(request.content(body.replace(":0,", ":1,")))
+            mockMvc.perform(request.content(body.replace("\"settingsVersion\":1", "\"settingsVersion\":2")))
                     .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"));
         }
         assertThat(jdbc.queryForObject("select status from uploads where id = ?", String.class, uploadId))
@@ -422,7 +423,7 @@ class UploadControllerIntegrationTest {
                             Long.class, uploadId)).isEqualTo(priorVersionId);
                     verify(http, times(calls)).send(any(HttpRequest.class),
                             org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any());
-                    String retryUpload = mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+                    String retryUpload = mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId).param("settingsVersion", "1")
                                     .file(new MockMultipartFile("file", "conversations.json", "application/json",
                                             export.getBytes(StandardCharsets.UTF_8)))
                                     .header(HttpHeaders.AUTHORIZATION, bearer))
@@ -612,6 +613,7 @@ class UploadControllerIntegrationTest {
         Team team = saveTeam(uploader, "분석 테스트 팀");
         var settings = TeamSettings.createDefault(team);
         settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        ReflectionTestUtils.setField(settings, "version", 1);
         entityManager.persist(settings);
         var type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
                 .failureConditions(List.of()).unknownConditions(List.of()).build();
@@ -638,7 +640,7 @@ class UploadControllerIntegrationTest {
         try {
             ReflectionTestUtils.setField(gemini, "http", http);
             ReflectionTestUtils.setField(gemini, "apiKey", "local-test-key");
-            mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+            mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId).param("settingsVersion", "1")
                             .file(new MockMultipartFile("file", "conversations.json", "application/json",
                                     export.getBytes(StandardCharsets.UTF_8)))
                             .header(HttpHeaders.AUTHORIZATION, bearer))

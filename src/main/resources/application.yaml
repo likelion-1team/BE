@@ -5,8 +5,8 @@ spring:
     import: optional:application-local.yaml
   servlet:
     multipart:
-      max-file-size: ${UPLOAD_MAX_FILE_SIZE:50MB}
-      max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:51MB}
+      max-file-size: ${UPLOAD_MAX_FILE_SIZE:20MB}
+      max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:21MB}
   jpa:
     hibernate:
       ddl-auto: update

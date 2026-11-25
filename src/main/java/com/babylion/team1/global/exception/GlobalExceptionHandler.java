@@ -110,7 +110,7 @@ public class GlobalExceptionHandler {
     /** 서블릿에서 요청 크기를 제한하면 컨트롤러에 진입하기 전에 발생한다. */
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ApiResponse<Void>> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException e) {
-        return toResponse(ErrorCode.FILE_TOO_LARGE, null);
+        return toResponse(ErrorCode.UPLOAD_TOO_LARGE, null);
     }
 
     @ExceptionHandler(MultipartException.class)

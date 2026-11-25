@@ -6,7 +6,8 @@ import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.repository.TeamMemberRepository;
 import com.babylion.team1.domain.team.repository.TeamSettingsRepository;
 import com.babylion.team1.domain.upload.dto.response.UploadResponse;
-import com.babylion.team1.domain.upload.dto.response.UploadResponse.Candidate;
+import com.babylion.team1.global.policy.ServerPolicy;
+import java.time.ZoneId;
 import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.upload.entity.UploadCandidate;
 import com.babylion.team1.domain.upload.entity.UploadCandidate.DuplicateType;
@@ -43,28 +44,32 @@ public class UploadService {
     private final UploadFileStorage storage;
 
     @Transactional
-    public UploadResponse upload(Long teamId, Long userId, MultipartFile file) {
+    public UploadResponse upload(Long teamId, Long userId, MultipartFile file, String settingsVersion) {
         TeamMember member = teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
                 .orElseThrow(() -> new CustomException(ErrorCode.NOT_A_MEMBER));
         TeamSettings settings = teamSettingsRepository.findByTeamId(teamId)
                 .filter(TeamSettings::isTargetSet)
-                .orElseThrow(() -> new CustomException(ErrorCode.TARGET_NOT_SET));
+                .orElseThrow(() -> new CustomException(ErrorCode.VALIDATION_FAILED));
+        int requestedVersion = parseVersion(settingsVersion);
+        if (settings.getVersion() == 0) {
+            throw new CustomException(ErrorCode.VALIDATION_FAILED);
+        }
+        if (requestedVersion != settings.getVersion()) {
+            throw new CustomException(ErrorCode.VERSION_CONFLICT);
+        }
         String fileName = validateFile(file);
         Path staged = storage.stage(file);
         try {
-            List<ExportConversation> conversations = reader.readCandidates(staged, fileName.toLowerCase(Locale.ROOT).endsWith(".zip"),
+            var export = reader.readCandidates(staged, fileName.toLowerCase(Locale.ROOT).endsWith(".zip"),
                     settings.getTargetFrom(), settings.getTargetTo());
+            var conversations = export.candidates();
             Set<String> duplicates = findDuplicates(teamId, conversations);
-            List<Candidate> candidates = conversations.stream()
-                    .map(conversation -> new Candidate(conversation.externalId(), conversation.title(),
-                            conversation.startedAt(), duplicates.contains(conversation.externalId())))
-                    .toList();
             Upload upload = uploadRepository.saveAndFlush(Upload.builder()
                     .team(member.getTeam())
                     .uploader(member.getUser())
                     .settings(settings)
                     .fileName(fileName)
-                    .conversationCount(candidates.size())
+                    .conversationCount(conversations.size())
                     .duplicateCount(duplicates.size())
                     .targetFrom(settings.getTargetFrom())
                     .targetTo(settings.getTargetTo())
@@ -82,7 +87,10 @@ public class UploadService {
             storage.store(staged, uploadId);
             storage.writeTargetPeriod(uploadId,
                     new UploadFileStorage.TargetPeriod(settings.getTargetFrom(), settings.getTargetTo()));
-            return new UploadResponse(uploadId, candidates);
+            return new UploadResponse(uploadId, Upload.LifecycleStatus.READY, settings.getVersion(),
+                    upload.getUploadedAt().plusMinutes(ServerPolicy.UPLOAD_RETENTION_MINUTES)
+                            .atZone(ZoneId.systemDefault()).withZoneSameInstant(ZoneId.of("Asia/Seoul")).toOffsetDateTime(),
+                    export.conversationCount(), conversations.size(), "/api/v1/uploads/" + uploadId + "/conversations");
         } finally {
             storage.delete(staged);
         }
@@ -116,16 +124,31 @@ public class UploadService {
         }
     }
 
+    private int parseVersion(String value) {
+        try {
+            int version = Integer.parseInt(value);
+            if (version >= 0) {
+                return version;
+            }
+        } catch (NumberFormatException ignored) {
+            // Missing and malformed versions use the same API error.
+        }
+        throw new CustomException(ErrorCode.VALIDATION_FAILED);
+    }
+
     private String validateFile(MultipartFile file) {
         if (file == null || file.isEmpty() || file.getOriginalFilename() == null) {
-            throw new CustomException(ErrorCode.INVALID_FILE_FORMAT);
+            throw new CustomException(ErrorCode.VALIDATION_FAILED);
+        }
+        if (file.getSize() > 20L * 1024 * 1024) {
+            throw new CustomException(ErrorCode.UPLOAD_TOO_LARGE);
         }
         String name = file.getOriginalFilename().replace('\\', '/');
         name = name.substring(name.lastIndexOf('/') + 1);
         String lowerCaseName = name.toLowerCase(Locale.ROOT);
         if (name.length() > 255 || name.codePoints().anyMatch(Character::isISOControl)
                 || !(lowerCaseName.endsWith(".json") || lowerCaseName.endsWith(".zip"))) {
-            throw new CustomException(ErrorCode.INVALID_FILE_FORMAT);
+            throw new CustomException(ErrorCode.UNSUPPORTED_FILE_TYPE);
         }
         return name;
     }

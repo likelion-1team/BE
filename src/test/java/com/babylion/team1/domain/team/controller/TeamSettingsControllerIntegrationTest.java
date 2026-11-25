@@ -452,7 +452,7 @@ class TeamSettingsControllerIntegrationTest {
                     "author":{"role":"assistant"},"content":{"parts":["world"]},"create_time":%d}}
                 }}]
                 """.formatted(UUID.randomUUID(), epoch, epoch, epoch + 1);
-        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId).param("settingsVersion", "1")
                         .file(new MockMultipartFile("file", "conversations.json", "application/json",
                                 export.getBytes(StandardCharsets.UTF_8)))
                         .header(HttpHeaders.AUTHORIZATION, bearer(fixture.leader())))
@@ -497,17 +497,16 @@ class TeamSettingsControllerIntegrationTest {
         MockMultipartFile file = new MockMultipartFile("file", "conversations.json", "application/json",
                 export.getBytes(StandardCharsets.UTF_8));
         String path = "/api/v1/teams/{teamId}/uploads";
-        mockMvc.perform(multipart(path, fixture.team().getId()).file(file)
+        mockMvc.perform(multipart(path, fixture.team().getId()).file(file).param("settingsVersion", "1")
                         .header(HttpHeaders.AUTHORIZATION, bearer(fixture.leader())))
-                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("TARGET_NOT_SET"));
+                .andExpect(status().isUnprocessableEntity()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
 
         update(fixture.team().getId(), fixture.leader(), validRequest(0, "보고서")).andExpect(status().isOk());
-        mockMvc.perform(multipart(path, fixture.team().getId()).file(file)
+        mockMvc.perform(multipart(path, fixture.team().getId()).file(file).param("settingsVersion", "1")
                         .header(HttpHeaders.AUTHORIZATION, bearer(fixture.leader())))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.conversations.length()").value(2))
-                .andExpect(jsonPath("$.data.conversations[0].externalId").value("first"))
-                .andExpect(jsonPath("$.data.conversations[1].externalId").value("last"));
+                .andExpect(jsonPath("$.data.eligibleConversationCount").value(2))
+                .andExpect(jsonPath("$.data.conversations").doesNotExist());
     }
 
     @Test

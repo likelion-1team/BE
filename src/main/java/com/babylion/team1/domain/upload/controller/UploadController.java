@@ -41,15 +41,16 @@ public class UploadController {
     public ResponseEntity<ApiResponse<UploadResponse>> upload(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
-            @RequestPart("file") MultipartFile file) {
-        UploadResponse response = uploadService.upload(teamId, userId, file);
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(required = false) String settingsVersion) {
+        UploadResponse response = uploadService.upload(teamId, userId, file, settingsVersion);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("S201", "업로드 성공", response));
     }
 
     @ExceptionHandler(MissingServletRequestPartException.class)
     public ResponseEntity<ApiResponse<Void>> handleMissingFile(MissingServletRequestPartException e) {
-        ErrorCode errorCode = ErrorCode.INVALID_FILE_FORMAT;
+        ErrorCode errorCode = ErrorCode.VALIDATION_FAILED;
         return ResponseEntity.status(errorCode.getStatus())
                 .body(ApiResponse.error(errorCode.getCode(), errorCode.getMessage(), null));
     }
