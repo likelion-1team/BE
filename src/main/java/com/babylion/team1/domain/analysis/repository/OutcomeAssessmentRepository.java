@@ -1,4 +1,4 @@
- package com.babylion.team1.domain.analysis.repository;
+package com.babylion.team1.domain.analysis.repository;
 
 import com.babylion.team1.domain.analysis.entity.OutcomeAssessment;
 import java.util.Collection;
