@@ -32,8 +32,8 @@ public class UploadController {
     public ApiResponse<UploadHistoryResponse> getMyUploads(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size) {
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.success("S200", "조회 성공", uploadHistoryService.getMyUploads(teamId, userId, page, size));
     }
 

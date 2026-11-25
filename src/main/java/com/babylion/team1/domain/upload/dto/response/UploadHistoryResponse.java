@@ -4,23 +4,14 @@ import com.babylion.team1.domain.analysis.entity.AnalysisStatus;
 import com.babylion.team1.domain.upload.entity.Upload.LifecycleStatus;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 
-public record UploadHistoryResponse(List<Item> content, int page, int size, long totalElements) {
+public record UploadHistoryResponse(List<Item> items, int page, int size, long total) {
 
-    public record Item(
-            Long uploadId,
-            String uploadedAt,
-            long analyzedCount,
-            @JsonInclude(JsonInclude.Include.ALWAYS) Period period,
-            LifecycleStatus status,
-            @JsonInclude(JsonInclude.Include.ALWAYS) Long analysisId,
-            @JsonInclude(JsonInclude.Include.ALWAYS) AnalysisStatus analysisStatus,
-            @JsonInclude(JsonInclude.Include.ALWAYS) Integer succeededCount,
-            @JsonInclude(JsonInclude.Include.ALWAYS) Integer failedCount
-    ) {
-    }
-
-    public record Period(LocalDate from, LocalDate to) {
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    public record Item(Long uploadId, OffsetDateTime createdAt, LifecycleStatus status, Long analysisId,
+                       AnalysisStatus analysisStatus, Integer selectedCount, Long succeededCount,
+                       Integer failedCount, LocalDate targetFrom, LocalDate targetTo) {
     }
 }
