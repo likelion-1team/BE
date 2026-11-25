@@ -626,6 +626,44 @@ class SharedFeedbackControllerIntegrationTest {
                 .content(body));
     }
 
+    @Test
+    void recordsUsageOnceAndRejectsConflictingReuses() throws Exception {
+        var fixture = saveTeam();
+        var feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "활용 기록", null);
+        var other = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "다른 피드백", null);
+        String eventId = java.util.UUID.randomUUID().toString();
+        String path = "/api/v1/feedbacks/{feedbackId}/usage-events";
+        String body = """
+                {"eventId":"%s","eventType":"COPY_SUCCEEDED"}
+                """.formatted(eventId);
+        var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId())
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId()))
+                .contentType("application/json").content(body);
+
+        var first = mockMvc.perform(request).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.eventId").value(eventId))
+                .andExpect(jsonPath("$.data.eventType").value("COPY_SUCCEEDED"))
+                .andReturn().getResponse().getContentAsString();
+        var retry = mockMvc.perform(request).andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(retry).isEqualTo(first);
+
+        mockMvc.perform(request.content(body.replace("COPY_SUCCEEDED", "USE_CONFIRMED")))
+                .andExpect(status().isConflict());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, other.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId()))
+                        .contentType("application/json").content(body))
+                .andExpect(status().isConflict());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path, feedback.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.leader().getId()))
+                        .contentType("application/json").content(body))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(request.content(body.replace(eventId, "invalid")))
+                .andExpect(status().isUnprocessableEntity());
+        assertThat(jdbc.queryForObject("select count(*) from feedback_usage_events where event_id = ?",
+                Integer.class, eventId)).isEqualTo(1);
+    }
+
     private TeamFixture saveTeam() {
         User leader = saveUser("목록 검증 팀장");
         User member = saveUser("목록 검증 팀원");
