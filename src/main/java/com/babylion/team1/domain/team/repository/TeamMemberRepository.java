@@ -69,7 +69,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 		select new com.babylion.team1.domain.team.repository.TeamMemberRepository$SubmissionSummary(
 			count(distinct case when item.id is not null or c.id is not null then membership.id else null end),
 			count(distinct membership.id),
-			count(distinct case when (item.status = SUCCEEDED and item.current = true) or c.id is not null
+			count(distinct case when item.status = SUCCEEDED and item.current = true and item.scopeClassification = IN_SCOPE
 				then membership.id else null end),
 			count(distinct case when item.status = SUCCEEDED and item.current = true then item.id else null end)
 				+ count(distinct c.id),
