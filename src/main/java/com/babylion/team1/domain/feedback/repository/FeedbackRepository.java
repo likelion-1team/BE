@@ -4,12 +4,14 @@ import com.babylion.team1.domain.feedback.entity.Feedback;
 import jakarta.persistence.LockModeType;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -65,4 +67,12 @@ public interface FeedbackRepository extends JpaRepository<Feedback, Long> {
         String getReaction();
         String getSharingStatus();
     }
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select f from Feedback f where f.id in :feedbackIds order by f.id")
+    List<Feedback> findAllByIdForUpdate(Collection<Long> feedbackIds);
+
+    @Modifying
+    @Query("delete from Feedback f where f.id in :feedbackIds")
+    void deleteByIds(Collection<Long> feedbackIds);
 }

@@ -1,10 +1,13 @@
 package com.babylion.team1.domain.analysis.repository;
 
 import com.babylion.team1.domain.analysis.entity.AnalysisItem;
+import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
 
 public interface AnalysisItemRepository extends JpaRepository<AnalysisItem, Long> {
     @org.springframework.data.jpa.repository.Query("""
@@ -31,4 +34,15 @@ public interface AnalysisItemRepository extends JpaRepository<AnalysisItem, Long
 
     boolean existsByVersionIdAndStatusNot(Long versionId,
             com.babylion.team1.domain.analysis.entity.AnalysisItemStatus status);
+
+    @Query("select distinct i.analysis.id from AnalysisItem i where i.version.id = :versionId order by i.analysis.id")
+    List<Long> findAnalysisIdsByVersionId(Long versionId);
+
+    @Modifying
+    @Query("update AnalysisItem i set i.current = false where i.version.id = :versionId")
+    void retireByVersionId(Long versionId);
+
+    @Modifying
+    @Query("update AnalysisItem i set i.aiEvidenceMessageKeys = null where i.version.id = :versionId")
+    void clearEvidenceByVersionId(Long versionId);
 }

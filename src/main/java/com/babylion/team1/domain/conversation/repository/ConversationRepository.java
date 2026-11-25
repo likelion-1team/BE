@@ -4,6 +4,7 @@ import com.babylion.team1.domain.conversation.entity.Conversation;
 import java.util.Collection;
 import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -45,4 +46,14 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
     @Query("select c.externalId from Conversation c where c.team.id = :teamId and c.externalId in :externalIds")
     List<String> findExistingExternalIds(@Param("teamId") Long teamId,
                                          @Param("externalIds") Collection<String> externalIds);
+
+    /** 남은 버전이나 v3 원문이 있으면 제목을 남긴다 */
+    @Modifying
+    @Query("""
+            update Conversation c set c.title = null
+            where c.id = :id
+            and not exists (select 1 from ConversationVersion v where v.conversation.id = c.id and v.deletedAt is null)
+            and not exists (select 1 from Message m where m.conversation.id = c.id and m.version is null)
+            """)
+    void clearTitleIfAllVersionsDeleted(Long id);
 }

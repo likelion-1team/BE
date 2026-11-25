@@ -2,10 +2,12 @@ package com.babylion.team1.domain.feedback.repository;
 
 import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Content;
 import com.babylion.team1.domain.feedback.entity.SharedCase;
+import java.util.Collection;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
 public interface SharedCaseRepository extends JpaRepository<SharedCase, Long> {
@@ -50,4 +52,12 @@ public interface SharedCaseRepository extends JpaRepository<SharedCase, Long> {
         Content getContent();
         boolean getIsGuide();
     }
+
+    @Modifying
+    @Query("update SharedCase sharedCase set sharedCase.status = DELETED where sharedCase.feedback.id in :feedbackIds")
+    void markDeletedByFeedbackIds(Collection<Long> feedbackIds);
+
+    @Modifying
+    @Query("delete from SharedCase sharedCase where sharedCase.feedback.id in :feedbackIds")
+    void deleteByFeedbackIds(Collection<Long> feedbackIds);
 }
