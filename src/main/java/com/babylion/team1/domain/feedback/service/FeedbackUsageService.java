@@ -3,6 +3,7 @@ package com.babylion.team1.domain.feedback.service;
 import com.babylion.team1.domain.feedback.dto.request.FeedbackUsageRequest;
 import com.babylion.team1.domain.feedback.dto.response.FeedbackUsageResponse;
 import com.babylion.team1.domain.feedback.entity.FeedbackUsageEvent;
+import com.babylion.team1.domain.feedback.repository.FeedbackEvidenceRepository;
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository;
 import com.babylion.team1.domain.feedback.repository.FeedbackUsageEventRepository;
 import com.babylion.team1.domain.user.entity.User;
@@ -20,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class FeedbackUsageService {
     private final EntityManager entityManager;
     private final FeedbackRepository feedbacks;
+    private final FeedbackEvidenceRepository evidence;
     private final FeedbackUsageEventRepository events;
 
     @Transactional
@@ -32,6 +34,9 @@ public class FeedbackUsageService {
         }
         var feedback = feedbacks.findByIdForUpdate(feedbackId).filter(row -> row.isOwnedBy(userId))
                 .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        if (evidence.hasDeletedOriginal(feedbackId)) {
+            throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
         var previous = events.findByUserIdAndEventId(userId, eventId);
         if (previous.isPresent()) {
             var event = previous.get();

@@ -29,7 +29,7 @@ public class SharePreviewService {
 
     @Transactional
     public SharePreviewResponse create(Long feedbackId, Long userId) {
-        var feedback = feedbacks.findById(feedbackId).filter(row -> row.isOwnedBy(userId))
+        var feedback = feedbacks.findByIdForUpdate(feedbackId).filter(row -> row.isOwnedBy(userId))
                 .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
         if (!evidence.existsByFeedbackId(feedbackId) || evidence.hasDeletedOriginal(feedbackId)) {
             throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
