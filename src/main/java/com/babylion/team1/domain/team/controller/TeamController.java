@@ -1,6 +1,5 @@
 package com.babylion.team1.domain.team.controller;
 
-import com.babylion.team1.domain.feedback.dto.response.GuidesResponse;
 import com.babylion.team1.domain.feedback.dto.response.MyFeedbackListResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
@@ -110,17 +109,20 @@ public class TeamController {
     public ApiResponse<SharedCasesResponse> getSharedCases(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
-            @RequestParam(name = "taskType", required = false) Long taskTypeId,
-            @RequestParam(required = false) String type) {
-        return ApiResponse.success("S200", "조회 성공", teamService.getSharedCases(teamId, userId, taskTypeId, type));
+            @RequestParam(required = false) String type,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getSharedCases(teamId, userId, type, page, size));
     }
 
     @Operation(summary = "가이드 목록 조회")
     @GetMapping("/{teamId}/guides")
-    public ApiResponse<GuidesResponse> getGuides(
+    public ApiResponse<SharedCasesResponse> getGuides(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
-            @RequestParam(required = false) String type) {
-        return ApiResponse.success("S200", "조회 성공", teamService.getGuides(teamId, userId, type));
+            @RequestParam(required = false) String type,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getGuides(teamId, userId, type, page, size));
     }
 }

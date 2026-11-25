@@ -12,8 +12,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Content;
+import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Example;
 import com.babylion.team1.domain.feedback.entity.Feedback;
+import com.babylion.team1.domain.feedback.entity.SharePreview;
+import com.babylion.team1.domain.feedback.entity.SharedCase;
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository;
+import com.babylion.team1.domain.feedback.service.FeedbackService;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
@@ -23,6 +28,7 @@ import com.babylion.team1.support.TestAccessTokens;
 import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -66,6 +72,8 @@ class FeedbackGuideControllerIntegrationTest {
     @Autowired
     private FeedbackRepository feedbackRepository;
     @Autowired
+    private FeedbackService feedbackService;
+    @Autowired
     private TestAccessTokens accessTokens;
     @Autowired
     private TransactionTemplate transactions;
@@ -96,8 +104,8 @@ class FeedbackGuideControllerIntegrationTest {
 
         mockMvc.perform(get(GUIDES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.ownerId())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.groups[0].guides[0].feedbackId").value(fixture.feedbackId()))
-                .andExpect(jsonPath("$.data.groups[0].guides[0].guideAddedAt").value(addedAt));
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(fixture.sharedCaseId()))
+                .andExpect(jsonPath("$.data.items[0].isGuide").value(true));
         mockMvc.perform(get(SHARED_CASES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.leaderId())))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].isGuide").value(true));
@@ -175,10 +183,10 @@ class FeedbackGuideControllerIntegrationTest {
 
         mockMvc.perform(get(GUIDES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.ownerId())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.groups").isEmpty());
+                .andExpect(jsonPath("$.data.items").isEmpty());
         mockMvc.perform(get(SHARED_CASES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.leaderId())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.items[0].feedbackId").value(fixture.feedbackId()))
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(fixture.sharedCaseId()))
                 .andExpect(jsonPath("$.data.items[0].isGuide").value(false));
 
         assign(fixture).andExpect(status().isOk())
@@ -186,7 +194,7 @@ class FeedbackGuideControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.guideAddedAt", endsWith("+09:00")));
         mockMvc.perform(get(GUIDES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.ownerId())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.groups[0].guides[0].feedbackId").value(fixture.feedbackId()));
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(fixture.sharedCaseId()));
     }
 
     @Test
@@ -273,7 +281,7 @@ class FeedbackGuideControllerIntegrationTest {
         CountDownLatch commitRevocation = new CountDownLatch(1);
         try {
             Future<?> revoke = executor.submit(() -> transactions.executeWithoutResult(ignored -> {
-                feedbackRepository.findByIdForUpdate(fixture.feedbackId()).orElseThrow().unshare();
+                feedbackService.updateShare(fixture.feedbackId(), fixture.ownerId(), false, null, null, null);
                 entityManager.flush();
                 revocationFlushed.countDown();
                 await(commitRevocation);
@@ -325,7 +333,7 @@ class FeedbackGuideControllerIntegrationTest {
             CountDownLatch revocationStarted = new CountDownLatch(1);
             Future<?> revoke = executor.submit(() -> transactions.executeWithoutResult(ignored -> {
                 revocationStarted.countDown();
-                feedbackRepository.findByIdForUpdate(fixture.feedbackId()).orElseThrow().unshare();
+                feedbackService.updateShare(fixture.feedbackId(), fixture.ownerId(), false, null, null, null);
             }));
             await(revocationStarted);
             assertWaits(revoke);
@@ -358,11 +366,22 @@ class FeedbackGuideControllerIntegrationTest {
         Feedback feedback = Feedback.builder().team(team).user(owner).taskType(type).upload(upload)
                 .feedbackDate(LocalDate.of(2026, 11, 21)).type("MISSING_CONTEXT").title("보고서 가이드")
                 .problem("분량 기준 없음").improvement("분량을 지정").occurrenceCount(1).build();
-        if (shared) {
-            feedback.share();
-        }
         entityManager.persist(feedback);
-        return new Fixture(team.getId(), leader.getId(), owner.getId(), feedback.getId());
+        Long sharedCaseId = null;
+        if (shared) {
+            Instant now = Instant.now();
+            var content = new Content("보고서 가이드", "MISSING_CONTEXT", "분량 기준 없음", "분량을 지정",
+                    new Example(null, null));
+            var preview = new SharePreview(feedback, content, now);
+            preview.consume(now);
+            entityManager.persist(preview);
+            var sharedCase = new SharedCase(feedback, preview, now);
+            entityManager.persist(sharedCase);
+            sharedCaseId = sharedCase.getId();
+            feedback.share();
+            feedback.advanceShareVersion();
+        }
+        return new Fixture(team.getId(), leader.getId(), owner.getId(), feedback.getId(), sharedCaseId);
     }
 
     private User saveUser(String name) {
@@ -388,7 +407,7 @@ class FeedbackGuideControllerIntegrationTest {
         assertThat(persisted.getGuideAddedAt()).isNull();
         mockMvc.perform(get(GUIDES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.ownerId())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.groups").isEmpty());
+                .andExpect(jsonPath("$.data.items").isEmpty());
         mockMvc.perform(get(SHARED_CASES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.leaderId())))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items").isEmpty());
@@ -428,5 +447,5 @@ class FeedbackGuideControllerIntegrationTest {
         return "Bearer " + accessTokens.create(userId);
     }
 
-    private record Fixture(Long teamId, Long leaderId, Long ownerId, Long feedbackId) {}
+    private record Fixture(Long teamId, Long leaderId, Long ownerId, Long feedbackId, Long sharedCaseId) {}
 }
