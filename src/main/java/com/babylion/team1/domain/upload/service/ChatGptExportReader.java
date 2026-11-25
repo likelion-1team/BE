@@ -231,27 +231,32 @@ class ChatGptExportReader {
         var conversation = mapper.createObjectNode();
         conversation.set("mapping", mapping);
         conversation.put("current_node", currentNode);
-        List<ChatGptConversationBranch.Turn> turns;
+        ChatGptConversationBranch.RestoredConversation restored;
         try {
-            turns = ChatGptConversationBranch.restore(conversation);
+            restored = ChatGptConversationBranch.restoreWithAttachments(conversation);
         } catch (CustomException e) {
-            turns = List.of();
+            restored = new ChatGptConversationBranch.RestoredConversation(List.of(), List.of());
         }
-        String validationCode = turns.isEmpty() ? "UNSUPPORTED_STRUCTURE" : null;
-        return new ExportConversation(externalId, title, startedAt, contentHash(turns), validationCode);
+        String validationCode = restored.turns().isEmpty() ? "UNSUPPORTED_STRUCTURE" : null;
+        return new ExportConversation(externalId, title, startedAt, contentHash(restored), validationCode);
     }
 
-    private String contentHash(List<ChatGptConversationBranch.Turn> turns) {
+    private String contentHash(ChatGptConversationBranch.RestoredConversation restored) {
         MessageDigest digest;
         try {
             digest = MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
-        for (var turn : turns) {
+        for (var turn : restored.turns()) {
             byte[] content = turn.content().getBytes(StandardCharsets.UTF_8);
             digest.update((turn.role().name() + ":" + content.length + ":").getBytes(StandardCharsets.UTF_8));
             digest.update(content);
+        }
+        for (String attachment : restored.excludedAttachments()) {
+            byte[] label = attachment.getBytes(StandardCharsets.UTF_8);
+            digest.update(("ATTACHMENT:" + label.length + ":").getBytes(StandardCharsets.UTF_8));
+            digest.update(label);
         }
         return HexFormat.of().formatHex(digest.digest());
     }
