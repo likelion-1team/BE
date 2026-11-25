@@ -1,38 +1,20 @@
 package com.babylion.team1.domain.feedback.dto.response;
 
-import com.babylion.team1.domain.feedback.entity.Feedback;
-import com.babylion.team1.domain.feedback.entity.FeedbackEvidence;
-import com.babylion.team1.domain.feedback.entity.FeedbackType;
-import java.math.BigDecimal;
+import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse.AiAssessment;
+import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse.OutcomeAssessment;
+import com.babylion.team1.domain.analysis.dto.AnalysisItemsResponse.ReworkAssessment;
+import com.babylion.team1.domain.feedback.entity.ReactionType;
+import java.time.OffsetDateTime;
 import java.util.List;
 
-public record FeedbackDetailResponse(
-        Long feedbackId,
-        String type,
-        String title,
-        String problem,
-        List<String> causes,
-        String improvement,
-        FeedbackExample example,
-        ExpectedSaving expectedSaving,
-        List<Evidence> evidences
-) {
-
-    public static FeedbackDetailResponse from(Feedback feedback, List<FeedbackEvidence> evidences) {
-        return new FeedbackDetailResponse(
-                feedback.getId(), FeedbackType.displayName(feedback.getType()), feedback.getTitle(),
-                feedback.getProblem(), feedback.getCauses(), feedback.getImprovement(),
-                FeedbackExample.from(feedback),
-                new ExpectedSaving(feedback.getExpectedSavingTokens(), feedback.getExpectedSavingCost(),
-                        feedback.getExpectedSavingTurns()),
-                evidences.stream()
-                        .map(evidence -> new Evidence(evidence.getConversation().getId(), evidence.getTurnIndexes()))
-                        .toList());
+public record FeedbackDetailResponse(Long feedbackId, Long itemId, Long conversationId,
+        Long conversationVersionId, String type, String title, String problem, List<String> causes,
+        String improvement, FeedbackExample example, List<String> evidenceMessageIds, List<String> limitations,
+        AiAssessment aiAssessment, OutcomeAssessment outcomeAssessment, ReworkAssessment reworkAssessment,
+        ReactionType reaction, Sharing sharing, ExpectedSaving expectedSaving, UsageSummary usageSummary) {
+    public record Sharing(String status, int version, Long sharedCaseId) {}
+    public record ExpectedSaving(String status, Long value, String reasonCode) {
+        public static final ExpectedSaving NOT_MEASURED = new ExpectedSaving("NOT_MEASURED", null, "NO_VALIDATED_ESTIMATE");
     }
-
-    public record ExpectedSaving(int tokens, BigDecimal cost, int turns) {
-    }
-
-    public record Evidence(Long conversationId, List<Integer> turnIndexes) {
-    }
+    public record UsageSummary(OffsetDateTime copySucceededAt, OffsetDateTime useConfirmedAt) {}
 }

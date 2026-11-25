@@ -94,6 +94,7 @@ class UploadControllerIntegrationTest {
 
         TeamSettings settings = TeamSettings.createDefault(team);
         settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        ReflectionTestUtils.setField(settings, "version", 1);
         entityManager.persist(settings);
 
         String sameTeamId = UUID.randomUUID().toString();
@@ -113,15 +114,14 @@ class UploadControllerIntegrationTest {
         MockMultipartFile file = new MockMultipartFile(
                 "file", "conversations.json", "application/json", original.getBytes(StandardCharsets.UTF_8));
 
-        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", team.getId())
+        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", team.getId()).param("settingsVersion", "1")
                         .file(file)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(uploader.getId())))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.uploadId").isNumber())
-                .andExpect(jsonPath("$.data.conversations[0].externalId").value(sameTeamId))
-                .andExpect(jsonPath("$.data.conversations[0].isDuplicate").value(true))
-                .andExpect(jsonPath("$.data.conversations[1].externalId").value(otherTeamId))
-                .andExpect(jsonPath("$.data.conversations[1].isDuplicate").value(false));
+                .andExpect(jsonPath("$.data.conversationCount").value(2))
+                .andExpect(jsonPath("$.data.eligibleConversationCount").value(2))
+                .andExpect(jsonPath("$.data.conversations").doesNotExist());
 
         var row = jdbc.queryForMap("""
                 select id, conversation_count, duplicate_count, status
@@ -150,30 +150,30 @@ class UploadControllerIntegrationTest {
         String bearer = "Bearer " + accessTokens.create(uploader.getId());
         mockMvc.perform(get(history, team.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.page").value(0))
-                .andExpect(jsonPath("$.data.size").value(10))
-                .andExpect(jsonPath("$.data.totalElements").value(2))
-                .andExpect(jsonPath("$.data.content[0].uploadId").value((int) uploadId))
-                .andExpect(jsonPath("$.data.content[0].analyzedCount").value(0))
-                .andExpect(jsonPath("$.data.content[0].period.from").value(TARGET_DATE.toString()))
-                .andExpect(jsonPath("$.data.content[0].period.to").value(TARGET_DATE.toString()))
-                .andExpect(jsonPath("$.data.content[0].status").value("UPLOADED"))
-                .andExpect(jsonPath("$.data.content[1].period").value(nullValue()));
-        mockMvc.perform(get(history, team.getId()).param("page", "1").param("size", "1")
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items[0].uploadId").value((int) uploadId))
+                .andExpect(jsonPath("$.data.items[0].succeededCount").value(nullValue()))
+                .andExpect(jsonPath("$.data.items[0].targetFrom").value(TARGET_DATE.toString()))
+                .andExpect(jsonPath("$.data.items[0].targetTo").value(TARGET_DATE.toString()))
+                .andExpect(jsonPath("$.data.items[0].status").value("READY"))
+                .andExpect(jsonPath("$.data.items[1].targetFrom").value(nullValue()));
+        mockMvc.perform(get(history, team.getId()).param("page", "2").param("size", "1")
                         .header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.content.length()").value(1))
-                .andExpect(jsonPath("$.data.content[0].period").value(nullValue()))
-                .andExpect(jsonPath("$.data.page").value(1))
-                .andExpect(jsonPath("$.data.totalElements").value(2));
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].targetFrom").value(nullValue()))
+                .andExpect(jsonPath("$.data.page").value(2))
+                .andExpect(jsonPath("$.data.total").value(2));
         mockMvc.perform(get(history, otherTeam.getId()).header(HttpHeaders.AUTHORIZATION,
                         "Bearer " + accessTokens.create(otherMember.getId())))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
 
     @Test
-    void returnsStoredProgressAndFailureOnlyToUploader() throws Exception {
+    void returnsUploadLifecycleOnlyToUploader() throws Exception {
         User uploader = User.builder().name("업로더").email("status-" + UUID.randomUUID() + "@test.com")
                 .passwordHash("test-password-hash").build();
         User other = User.builder().name("다른 사용자").email("other-" + UUID.randomUUID() + "@test.com")
@@ -192,36 +192,36 @@ class UploadControllerIntegrationTest {
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION,
                         "Bearer " + accessTokens.create(other.getId())))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_UPLOADER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(get(path, Long.MAX_VALUE).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("UPLOAD_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
-                .andExpect(jsonPath("$.data.status").value("UPLOADED"))
-                .andExpect(jsonPath("$.data.progress").value(0))
-                .andExpect(jsonPath("$.data.failReason").value(nullValue()))
-                .andExpect(jsonPath("$.data.savedCount").doesNotHaveJsonPath());
+                .andExpect(jsonPath("$.data.status").value("READY"))
+                .andExpect(jsonPath("$.data.uploadId").value(upload.getId()))
+                .andExpect(jsonPath("$.data.createdAt").isString())
+                .andExpect(jsonPath("$.data.expiresAt").isString())
+                .andExpect(jsonPath("$.data.cleanupStatus").value("PENDING"))
+                .andExpect(jsonPath("$.data.analysisId").value(nullValue()))
+                .andExpect(jsonPath("$.data.progress").doesNotHaveJsonPath());
 
         upload.startAnalysis(1);
-        upload.updateProgress(60);
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("ANALYZING"))
-                .andExpect(jsonPath("$.data.progress").value(60))
-                .andExpect(jsonPath("$.data.failReason").value(nullValue()))
-                .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
+                .andExpect(jsonPath("$.data.status").value("CONSUMED"))
+                .andExpect(jsonPath("$.data.analysisId").value(nullValue()));
 
         upload.fail("분석 실패");
+        entityManager.flush();
+        jdbc.update("update uploads set uploaded_at = ? where id = ?",
+                java.time.LocalDateTime.now().minusHours(2), upload.getId());
+        entityManager.clear();
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("FAILED"))
-                .andExpect(jsonPath("$.data.progress").value(60))
-                .andExpect(jsonPath("$.data.failReason").value("분석 실패"))
-                .andExpect(jsonPath("$.data.savedCount").doesNotHaveJsonPath())
-                .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.code").value("UPLOAD_EXPIRED"));
     }
 
     @ParameterizedTest
@@ -235,8 +235,10 @@ class UploadControllerIntegrationTest {
         Team team = saveTeam(uploader, "분석 테스트 팀");
         var settings = TeamSettings.createDefault(team);
         settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        ReflectionTestUtils.setField(settings, "version", 1);
         entityManager.persist(settings);
-        var type = TeamTaskType.builder().team(team).name("보고서").successDefinition("제출").build();
+        var type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(type);
         entityManager.flush();
 
@@ -248,13 +250,14 @@ class UploadControllerIntegrationTest {
         String export = """
                 [{"id":"%s","title":"테스트","create_time":%d,"current_node":"answer","mapping":{
                   "question":{"parent":null,"children":["answer"],"message":{
-                    "author":{"role":"user"},"content":{"parts":["hello"]},"create_time":%d}},
+                    "author":{"role":"user"},"content":{"parts":["hello"]},
+                    "metadata":{"attachments":[{"name":"reports/summary.pdf","id":"internal-id"}]},"create_time":%d}},
                   "answer":{"parent":"question","children":[],"message":{
                     "author":{"role":"assistant"},"content":{"parts":["world"]},"metadata":{"model_slug":"gpt-4o"},"create_time":%d}}
                 }}]
                 """.formatted(externalId, epoch, epoch, epoch + 1);
         String bearer = "Bearer " + accessTokens.create(userId);
-        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+        mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId).param("settingsVersion", "1")
                         .file(new MockMultipartFile("file", "conversations.json", "application/json",
                                 export.getBytes(StandardCharsets.UTF_8)))
                         .header(HttpHeaders.AUTHORIZATION, bearer))
@@ -278,19 +281,31 @@ class UploadControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.total").value(1));
         String key = UUID.randomUUID().toString();
         String body = """
-                {"settingsVersion":0,"selections":[{"selectionId":"%s","taskTypeId":%d}]}
+                {"settingsVersion":1,"selections":[{"selectionId":"%s","taskTypeId":%d}]}
                 """.formatted(selectionId, typeId);
         var request = post("/api/v1/uploads/{uploadId}/analyses", uploadId)
                 .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, bearer)
                 .header("Idempotency-Key", key);
         if (!commit) {
-            mockMvc.perform(request.content(body.replace(":0,", ":1,")))
+            mockMvc.perform(request.content(body.replace("\"settingsVersion\":1", "\"settingsVersion\":2")))
                     .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
         }
         mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.status").value("QUEUED")).andExpect(jsonPath("$.data.selectedCount").value(1));
         entityManager.flush();
         Long analysisId = jdbc.queryForObject("select id from analyses where upload_id = ?", Long.class, uploadId);
+        mockMvc.perform(get("/api/v1/uploads/{uploadId}", uploadId).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("CONSUMED"))
+                .andExpect(jsonPath("$.data.analysisId").value(analysisId))
+                .andExpect(jsonPath("$.data.progress").doesNotHaveJsonPath());
+        mockMvc.perform(get("/api/v1/teams/{teamId}/uploads", teamId).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].analysisId").value(analysisId))
+                .andExpect(jsonPath("$.data.items[0].analysisStatus").value("QUEUED"))
+                .andExpect(jsonPath("$.data.items[0].succeededCount").value(nullValue()))
+                .andExpect(jsonPath("$.data.items[0].failedCount").value(nullValue()));
+
         String statusPath = "/api/v1/analyses/{analysisId}";
         String itemsPath = statusPath + "/items";
         mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
@@ -322,7 +337,7 @@ class UploadControllerIntegrationTest {
         mockMvc.perform(request.content(body)).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.analysisId").value(analysisId));
         if (!commit) {
-            mockMvc.perform(request.content(body.replace(":0,", ":1,")))
+            mockMvc.perform(request.content(body.replace("\"settingsVersion\":1", "\"settingsVersion\":2")))
                     .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"));
         }
         assertThat(jdbc.queryForObject("select status from uploads where id = ?", String.class, uploadId))
@@ -331,6 +346,9 @@ class UploadControllerIntegrationTest {
                 select m.content from messages m join analysis_items i on i.version_id = m.version_id
                 where i.analysis_id = ? order by m.idx
                 """, String.class, analysisId)).containsExactly("hello", "world");
+        if (!commit) {
+            verifyWorkerTimeoutRetries(analysisId);
+        }
         if (commit) {
             var gemini = applicationContext.getBean("geminiFeedbackClient");
             var originalHttp = ReflectionTestUtils.getField(gemini, "http");
@@ -412,7 +430,7 @@ class UploadControllerIntegrationTest {
                             Long.class, uploadId)).isEqualTo(priorVersionId);
                     verify(http, times(calls)).send(any(HttpRequest.class),
                             org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any());
-                    String retryUpload = mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+                    String retryUpload = mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId).param("settingsVersion", "1")
                                     .file(new MockMultipartFile("file", "conversations.json", "application/json",
                                             export.getBytes(StandardCharsets.UTF_8)))
                                     .header(HttpHeaders.AUTHORIZATION, bearer))
@@ -450,6 +468,21 @@ class UploadControllerIntegrationTest {
                     return;
                 }
                 assertThat(state).isEqualTo("SUCCEEDED");
+                mockMvc.perform(get("/api/v1/teams/{teamId}/uploads", teamId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.items[0].analysisStatus").value("SUCCEEDED"))
+                        .andExpect(jsonPath("$.data.items[0].succeededCount").value(1))
+                        .andExpect(jsonPath("$.data.items[0].failedCount").value(0));
+                Long conversationId = jdbc.queryForObject("""
+                        select v.conversation_id from analysis_items i join conversation_versions v on v.id = i.version_id
+                        where i.analysis_id = ?
+                        """, Long.class, analysisId);
+                mockMvc.perform(get("/api/v1/conversations/{conversationId}", conversationId)
+                                .header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.excludedAttachments.length()").value(1))
+                        .andExpect(jsonPath("$.data.excludedAttachments[0]").value("summary.pdf"))
+                        .andExpect(jsonPath("$.data.messages[0].content").value("hello"));
                 assertThat(observedStages).containsExactly("ASSESSING", "GENERATING_FEEDBACK");
                 mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
                         .andExpect(status().isOk())
@@ -566,6 +599,35 @@ class UploadControllerIntegrationTest {
         }
     }
 
+    private void verifyWorkerTimeoutRetries(Long analysisId) {
+        var worker = applicationContext.getBean("versionedAnalysisWorker");
+        var first = ReflectionTestUtils.invokeMethod(worker, "claim", analysisId);
+        assertThat(first).isNotNull();
+
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            entityManager.flush();
+            assertThat(jdbc.queryForObject("select attempt_count from analysis_items where analysis_id = ?",
+                    Integer.class, analysisId)).isEqualTo(attempt);
+            jdbc.update("update analysis_items set claim_expires_at = ? where analysis_id = ?",
+                    java.time.LocalDateTime.of(2000, 1, 1, 0, 0), analysisId);
+            entityManager.clear();
+            var next = ReflectionTestUtils.invokeMethod(worker, "claim", analysisId);
+            if (attempt < 3) {
+                assertThat(next).isNotNull();
+                ReflectionTestUtils.invokeMethod(worker, "save", analysisId, first, null);
+                assertThat(jdbc.queryForObject("select completed_count from analyses where id = ?",
+                        Integer.class, analysisId)).isZero();
+            } else {
+                assertThat(next).isNull();
+            }
+        }
+        entityManager.flush();
+        assertThat(jdbc.queryForMap("select status, failure_code from analysis_items where analysis_id = ?", analysisId))
+                .containsEntry("status", "FAILED").containsEntry("failure_code", "WORKER_TIMEOUT");
+        assertThat(jdbc.queryForMap("select status, completed_count, failed_count from analyses where id = ?", analysisId))
+                .containsEntry("status", "FAILED").containsEntry("completed_count", 1).containsEntry("failed_count", 1);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void analyzesUploadedConversationAndReturnsFallbackOrGeneratedPrompt(boolean geminiSucceeds) throws Exception {
@@ -597,8 +659,10 @@ class UploadControllerIntegrationTest {
         Team team = saveTeam(uploader, "분석 테스트 팀");
         var settings = TeamSettings.createDefault(team);
         settings.updateTarget(TARGET_DATE, TARGET_DATE, null, null);
+        ReflectionTestUtils.setField(settings, "version", 1);
         entityManager.persist(settings);
-        var type = TeamTaskType.builder().team(team).name("보고서").successDefinition("제출").build();
+        var type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(type);
         entityManager.flush();
 
@@ -622,7 +686,7 @@ class UploadControllerIntegrationTest {
         try {
             ReflectionTestUtils.setField(gemini, "http", http);
             ReflectionTestUtils.setField(gemini, "apiKey", "local-test-key");
-            mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId)
+            mockMvc.perform(multipart("/api/v1/teams/{teamId}/uploads", teamId).param("settingsVersion", "1")
                             .file(new MockMultipartFile("file", "conversations.json", "application/json",
                                     export.getBytes(StandardCharsets.UTF_8)))
                             .header(HttpHeaders.AUTHORIZATION, bearer))
@@ -653,18 +717,16 @@ class UploadControllerIntegrationTest {
             mockMvc.perform(get("/api/v1/teams/{teamId}/uploads", teamId)
                             .header(HttpHeaders.AUTHORIZATION, bearer))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.content[0].status").value("DONE"))
-                    .andExpect(jsonPath("$.data.content[0].analyzedCount").value(1))
-                    .andExpect(jsonPath("$.data.content[0].period.from").value(TARGET_DATE.toString()))
-                    .andExpect(jsonPath("$.data.content[0].period.to").value(TARGET_DATE.toString()));
+                    .andExpect(jsonPath("$.data.items[0].status").value("CONSUMED"))
+                    .andExpect(jsonPath("$.data.items[0].succeededCount").value(1))
+                    .andExpect(jsonPath("$.data.items[0].targetFrom").value(TARGET_DATE.toString()))
+                    .andExpect(jsonPath("$.data.items[0].targetTo").value(TARGET_DATE.toString()));
             mockMvc.perform(get("/api/v1/uploads/{uploadId}", uploadId)
                             .header(HttpHeaders.AUTHORIZATION, bearer))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.status").value("DONE"))
-                    .andExpect(jsonPath("$.data.progress").value(100))
-                    .andExpect(jsonPath("$.data.failReason").value(nullValue()))
-                    .andExpect(jsonPath("$.data.savedCount").value(1))
-                    .andExpect(jsonPath("$.data.skippedDuplicateCount").value(0));
+                    .andExpect(jsonPath("$.data.status").value("CONSUMED"))
+                    .andExpect(jsonPath("$.data.analysisId").value(nullValue()))
+                    .andExpect(jsonPath("$.data.progress").doesNotHaveJsonPath());
             assertThat(jdbc.queryForObject("select progress from uploads where id = ?", Integer.class, uploadId))
                     .isEqualTo(100);
             assertThat(jdbc.queryForObject("select count(*) from uploads where id = ? and analyzed_at is not null",
@@ -726,7 +788,8 @@ class UploadControllerIntegrationTest {
     }
 
     private void saveExistingConversation(Team team, User uploader, String externalId) {
-        TeamTaskType type = TeamTaskType.builder().team(team).name("보고서").successDefinition("제출").build();
+        TeamTaskType type = TeamTaskType.builder().team(team).name("보고서").successConditions(List.of("제출"))
+                .failureConditions(List.of()).unknownConditions(List.of()).build();
         entityManager.persist(type);
         Upload previous = Upload.builder().team(team).uploader(uploader).fileName("previous.json")
                 .conversationCount(1).build();

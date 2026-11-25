@@ -160,6 +160,14 @@ public class Feedback {
 		return user.getId().equals(userId);
 	}
 
+	@ColumnDefault("0")
+	@Column(name = "share_version", nullable = false)
+	private int shareVersion;
+
+	public void advanceShareVersion() {
+		shareVersion = Math.incrementExact(shareVersion);
+	}
+
 	/** 직원이 팀에 공유 허용 */
 	public void share() {
 		if (Boolean.TRUE.equals(isShared)) {

@@ -29,6 +29,7 @@ public enum ErrorCode {
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_SERVER_ERROR", "서버 내부 오류가 발생했습니다."),
 
     // Auth
+    SHARING_REDACTION_FAILED(HttpStatus.UNPROCESSABLE_CONTENT, "SHARING_REDACTION_FAILED", "공유 내용의 비식별화를 확인할 수 없습니다."),
     VALIDATION_FAILED(HttpStatus.UNPROCESSABLE_CONTENT, "VALIDATION_FAILED", "입력값을 확인해 주세요."),
     EMAIL_IN_USE(HttpStatus.CONFLICT, "EMAIL_IN_USE", "이미 가입된 이메일입니다."),
     RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMITED", "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."),
@@ -46,12 +47,20 @@ public enum ErrorCode {
     LEADER_ONLY(HttpStatus.FORBIDDEN, "LEADER_ONLY", "팀장만 사용할 수 있는 기능입니다."),
     ROLE_FORBIDDEN(HttpStatus.FORBIDDEN, "ROLE_FORBIDDEN", "이 기능을 사용할 권한이 없습니다."),
     INVALID_STATE(HttpStatus.CONFLICT, "INVALID_STATE", "현재 상태에서는 처리할 수 없습니다."),
+    SOURCE_DELETED(HttpStatus.GONE, "SOURCE_DELETED", "원문이 삭제되었습니다."),
+    PREVIEW_EXPIRED(HttpStatus.GONE, "PREVIEW_EXPIRED", "공유 미리보기가 만료되었습니다."),
     VERSION_CONFLICT(HttpStatus.CONFLICT, "VERSION_CONFLICT", "저장된 버전이 변경되었습니다. 최신 값을 확인해 주세요."),
+    SHARING_REVOKED(HttpStatus.CONFLICT, "SHARING_REVOKED", "공유가 철회된 사례입니다."),
     TEAM_NOT_FOUND(HttpStatus.NOT_FOUND, "TEAM_NOT_FOUND", "팀을 찾을 수 없습니다."),
     ALREADY_MEMBER(HttpStatus.CONFLICT, "ALREADY_MEMBER", "이미 팀 멤버입니다."),
 
     // Upload
     INVALID_FILE_FORMAT(HttpStatus.BAD_REQUEST, "INVALID_FILE_FORMAT", "ChatGPT 내보내기 파일 형식을 확인해 주세요."),
+    UPLOAD_TOO_LARGE(HttpStatus.CONTENT_TOO_LARGE, "UPLOAD_TOO_LARGE", "업로드 파일이 허용 용량을 초과했습니다."),
+    EXPANDED_SIZE_EXCEEDED(HttpStatus.CONTENT_TOO_LARGE, "EXPANDED_SIZE_EXCEEDED", "압축 파일이 허용 한도를 초과했습니다."),
+    UNSUPPORTED_FILE_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_FILE_TYPE", "지원하지 않는 업로드 파일 형식입니다."),
+    UNSUPPORTED_STRUCTURE(HttpStatus.UNPROCESSABLE_CONTENT, "UNSUPPORTED_STRUCTURE", "ChatGPT 내보내기 파일 구조를 확인해 주세요."),
+    UNSAFE_ARCHIVE(HttpStatus.UNPROCESSABLE_CONTENT, "UNSAFE_ARCHIVE", "안전하지 않은 압축 파일입니다."),
     FILE_TOO_LARGE(HttpStatus.CONTENT_TOO_LARGE, "FILE_TOO_LARGE", "파일이 허용 용량을 초과했습니다."),
 
     // Analysis

@@ -6,10 +6,13 @@ import com.babylion.team1.domain.feedback.dto.response.FeedbackDetailResponse;
 import com.babylion.team1.domain.feedback.dto.response.FeedbackReactionResponse;
 import com.babylion.team1.domain.feedback.dto.response.FeedbackShareResponse;
 import com.babylion.team1.domain.feedback.service.FeedbackService;
+import com.babylion.team1.global.exception.CustomException;
+import com.babylion.team1.global.exception.ErrorCode;
 import com.babylion.team1.global.response.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.validation.BindingResult;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -38,15 +41,18 @@ public class FeedbackController {
             @PathVariable Long feedbackId,
             @AuthenticationPrincipal Long userId,
             @Valid @RequestBody FeedbackShareRequest request) {
-        return ApiResponse.success("S200", "공유 설정 변경 성공",
-                feedbackService.updateShare(feedbackId, userId, request.shared()));
+        return ApiResponse.success("S200", "공유 상태 변경 성공",
+                feedbackService.updateShare(feedbackId, userId, request.shared(), request.expectedShareVersion(), request.previewId(), request.previewVersion()));
     }
 
     @PutMapping("/api/v1/feedbacks/{feedbackId}/reaction")
     public ApiResponse<FeedbackReactionResponse> recordReaction(
             @PathVariable Long feedbackId,
             @AuthenticationPrincipal Long userId,
-            @Valid @RequestBody FeedbackReactionRequest request) {
+            @Valid @RequestBody FeedbackReactionRequest request, BindingResult validation) {
+        if (validation.hasErrors()) {
+            throw new CustomException(ErrorCode.VALIDATION_FAILED);
+        }
         return ApiResponse.success("S200", "반응 기록 성공",
                 feedbackService.recordReaction(feedbackId, userId, request.type(), request.reason()));
     }

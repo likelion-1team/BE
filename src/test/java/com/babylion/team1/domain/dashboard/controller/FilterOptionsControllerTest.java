@@ -9,15 +9,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.babylion.team1.domain.dashboard.DashboardFixture;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamMember;
+import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.entity.TeamTaskType;
-import com.babylion.team1.domain.upload.entity.Upload;
 import com.babylion.team1.domain.user.entity.User;
 import jakarta.persistence.EntityManager;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.temporal.TemporalAdjusters;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -27,15 +32,8 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 업무 유형 A, B, C, D(D는 대화 없음)
- *
- *  - member1 / A / gpt-4o      / 2026-11-03
- *  - member1 / B / o3          / 2026-11-10
- *  - member1 / A / model NULL  / 2026-11-12
- *  - member2 / A / gpt-4o-mini / 2026-10-28
- *  - member2 / C / gpt-4o      / 2026-11-20
- *  - member3 : 대화 없음
- *  - 다른 팀 대화 (model: other-team-model, 2026-01-01) : 어디에도 나오면 안 됨
+ * 기준 버전 1: 지난주 월요일 2주 전 수요일 ~ 그다음 주 화요일, 버전 2: 지난주 화요일 ~ 이번 주 이후.
+ * 이전 기준에서 쓰던 업무 유형은 비활성이다.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -53,126 +51,139 @@ class FilterOptionsControllerTest {
     private DashboardFixture fixture;
 
     private User leader;
-    private User member1;
-    private User member3;
+    private User member;
     private User outsider;
     private Team team;
-    private TeamTaskType taskTypeA;
-    private TeamTaskType taskTypeB;
-    private TeamTaskType taskTypeC;
+    private TeamTaskType taskType;
+    private LocalDate thisMonday;
 
     @BeforeEach
     void setUp() {
         // 테스트도 로컬 DB를 쓰므로, 직접 가입해 둔 계정과 겹치지 않게 실행마다 고유한 이메일을 쓴다
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         leader = fixture.user("팀장", "filter-it-leader-" + suffix + "@test.com");
-        member1 = fixture.user("팀원1", "filter-it-member1-" + suffix + "@test.com");
-        User member2 = fixture.user("팀원2", "filter-it-member2-" + suffix + "@test.com");
-        member3 = fixture.user("팀원3", "filter-it-member3-" + suffix + "@test.com");
+        member = fixture.user("팀원", "filter-it-member-" + suffix + "@test.com");
         outsider = fixture.user("외부인", "filter-it-outsider-" + suffix + "@test.com");
-
         team = fixture.team("기획팀", leader);
         em.persist(TeamMember.leader(team, leader));
-        em.persist(TeamMember.member(team, member1));
-        em.persist(TeamMember.member(team, member2));
-        em.persist(TeamMember.member(team, member3));
+        em.persist(TeamMember.member(team, member));
 
-        taskTypeA = fixture.taskType(team, "주간 보고서 작성");
-        taskTypeB = fixture.taskType(team, "회의록 정리");
-        taskTypeC = fixture.taskType(team, "고객 응대");
-        fixture.taskType(team, "대화 없는 업무");
+        thisMonday = LocalDate.now(ZoneId.of("Asia/Seoul")).with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        TeamTaskType oldTaskType = fixture.taskType(team, "이전 업무 유형");
+        oldTaskType.deactivate();
+        taskType = fixture.taskType(team, "주간 보고서 작성");
+        LocalDate firstMonday = thisMonday.minusWeeks(3);
+        TeamSettings first = fixture.settings(team, oldTaskType, firstMonday.plusDays(2), firstMonday.plusDays(8));
+        fixture.nextSettings(first, taskType, thisMonday.minusDays(6), thisMonday.plusWeeks(2));
 
-        Upload upload1 = fixture.upload(team, member1);
-        Upload upload2 = fixture.upload(team, member2);
-        saveConversation(upload1, member1, taskTypeA, "gpt-4o", LocalDate.of(2026, 11, 3));
-        saveConversation(upload1, member1, taskTypeB, "o3", LocalDate.of(2026, 11, 10));
-        saveConversation(upload1, member1, taskTypeA, null, LocalDate.of(2026, 11, 12));
-        saveConversation(upload2, member2, taskTypeA, "gpt-4o-mini", LocalDate.of(2026, 10, 28));
-        saveConversation(upload2, member2, taskTypeC, "gpt-4o", LocalDate.of(2026, 11, 20));
-
-        // 다른 팀: outsider가 팀장
         Team otherTeam = fixture.team("다른 팀", outsider);
         em.persist(TeamMember.leader(otherTeam, outsider));
-        TeamTaskType otherTaskType = fixture.taskType(otherTeam, "다른 팀 업무");
-        saveConversation(fixture.upload(otherTeam, outsider), outsider, otherTaskType,
-                "other-team-model", LocalDate.of(2026, 1, 1));
-
+        fixture.settings(otherTeam, fixture.taskType(otherTeam, "다른 팀 업무"), thisMonday.minusWeeks(8), thisMonday);
         em.flush();
         em.clear();
     }
 
     @Test
-    @DisplayName("팀원이 조회하면 본인 대화에 등장한 업무 유형·모델·기간만 응답한다 (model NULL 제외)")
-    void memberGetsOwnOptions() throws Exception {
-        perform(member1, url(team.getId()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("S200"))
-                .andExpect(jsonPath("$.message").value("조회 성공"))
-                .andExpect(jsonPath("$.data.taskTypes", hasSize(2)))
-                .andExpect(jsonPath("$.data.taskTypes[0].id").value(taskTypeA.getId()))
-                .andExpect(jsonPath("$.data.taskTypes[0].name").value("주간 보고서 작성"))
-                .andExpect(jsonPath("$.data.taskTypes[1].id").value(taskTypeB.getId()))
-                .andExpect(jsonPath("$.data.taskTypes[1].name").value("회의록 정리"))
-                .andExpect(jsonPath("$.data.models", contains("gpt-4o", "o3")))
-                .andExpect(jsonPath("$.data.dataFrom").value("2026-11-03"))
-                .andExpect(jsonPath("$.data.dataTo").value("2026-11-12"));
+    @DisplayName("ME: 일·주 단위를 고를 수 있고 availableWeeks는 빈 목록이다. 팀장도 조회할 수 있다")
+    void personalOptions() throws Exception {
+        for (User user : new User[] {member, leader}) {
+            perform(user, "?scope=ME")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value("S200"))
+                    .andExpect(jsonPath("$.message").value("조회 성공"))
+                    .andExpect(jsonPath("$.data.length()").value(8))
+                    .andExpect(jsonPath("$.data.scope").value("ME"))
+                    .andExpect(jsonPath("$.data.taskTypes", hasSize(1)))
+                    .andExpect(jsonPath("$.data.taskTypes[0].length()").value(2))
+                    .andExpect(jsonPath("$.data.taskTypes[0].taskTypeId").value(taskType.getId()))
+                    .andExpect(jsonPath("$.data.taskTypes[0].name").value("주간 보고서 작성"))
+                    .andExpect(jsonPath("$.data.settingsVersions", contains(1, 2)))
+                    .andExpect(jsonPath("$.data.allowedUnits", contains("DAY", "WEEK")))
+                    .andExpect(jsonPath("$.data.availableWeeks", hasSize(0)))
+                    .andExpect(jsonPath("$.data.allowedModels", hasSize(0)))
+                    .andExpect(jsonPath("$.data.policyVersion").value(1))
+                    .andExpect(jsonPath("$.data.comparisonAvailable").value(false));
+        }
     }
 
     @Test
-    @DisplayName("팀장이 조회하면 팀 전체 대화 기준으로 응답하고, 다른 팀 데이터는 섞이지 않는다")
-    void leaderGetsTeamOptions() throws Exception {
-        perform(leader, url(team.getId()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.taskTypes", hasSize(3)))
-                .andExpect(jsonPath("$.data.taskTypes[0].id").value(taskTypeA.getId()))
-                .andExpect(jsonPath("$.data.taskTypes[1].id").value(taskTypeB.getId()))
-                .andExpect(jsonPath("$.data.taskTypes[2].id").value(taskTypeC.getId()))
-                .andExpect(jsonPath("$.data.models", contains("gpt-4o", "gpt-4o-mini", "o3")))
-                .andExpect(jsonPath("$.data.dataFrom").value("2026-10-28"))
-                .andExpect(jsonPath("$.data.dataTo").value("2026-11-20"));
+    @DisplayName("TEAM: 주 단위만 고를 수 있고, 대상 기간에 걸친 완료된 주만 응답한다(이번 주 제외). 팀원도 조회할 수 있다")
+    void teamOptions() throws Exception {
+        for (User viewer : new User[] {member, leader}) {
+            perform(viewer, "?scope=TEAM")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.scope").value("TEAM"))
+                    .andExpect(jsonPath("$.data.settingsVersions", contains(1, 2)))
+                    .andExpect(jsonPath("$.data.allowedUnits", contains("WEEK")))
+                    .andExpect(jsonPath("$.data.availableWeeks[*].weekStart", contains(
+                            thisMonday.minusWeeks(3).toString(),
+                            thisMonday.minusWeeks(2).toString(),
+                            thisMonday.minusWeeks(1).toString())))
+                    .andExpect(jsonPath("$.data.availableWeeks[2].weekEnd").value(thisMonday.minusDays(1).toString()))
+                    .andExpect(jsonPath("$.data.allowedModels", hasSize(0)))
+                    .andExpect(jsonPath("$.data.comparisonAvailable").value(false));
+        }
     }
 
     @Test
-    @DisplayName("데이터가 없으면 빈 목록과 null 기간을 응답한다")
-    void noData() throws Exception {
-        perform(member3, url(team.getId()))
+    @DisplayName("기준을 저장한 적이 없는 팀은 빈 목록을 응답한다")
+    void unconfiguredTeam() throws Exception {
+        Team newTeam = fixture.team("새 팀", leader);
+        em.persist(TeamMember.leader(newTeam, leader));
+        em.persist(TeamSettings.createDefault(newTeam));
+        em.flush();
+
+        mockMvc.perform(fixture.get(leader, url(newTeam.getId()) + "?scope=TEAM"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.taskTypes", hasSize(0)))
-                .andExpect(jsonPath("$.data.models", hasSize(0)))
-                .andExpect(jsonPath("$.data.dataFrom").isEmpty())
-                .andExpect(jsonPath("$.data.dataTo").isEmpty());
+                .andExpect(jsonPath("$.data.settingsVersions", hasSize(0)))
+                .andExpect(jsonPath("$.data.availableWeeks", hasSize(0)));
     }
 
     @Test
-    @DisplayName("팀 멤버가 아니면 403 NOT_A_MEMBER, 없는 팀이면 404 TEAM_NOT_FOUND로 응답한다")
+    @DisplayName("다른 팀이거나 없는 팀이면 404다")
     void accessDenied() throws Exception {
-        perform(outsider, url(team.getId()))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+        for (String query : new String[] {"?scope=ME", "?scope=TEAM"}) {
+            perform(outsider, query)
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+            mockMvc.perform(fixture.get(member, url(Long.MAX_VALUE) + query))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        }
+    }
 
-        perform(leader, url(team.getId() + 999_999))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("TEAM_NOT_FOUND"));
+    @ParameterizedTest
+    @ValueSource(strings = {"", "?scope=", "?scope=ALL", "?scope=ME&models=gpt-4o", "?scope=TEAM&weekStart=2026-11-02"})
+    @DisplayName("scope가 없거나 잘못됐거나 지원하지 않는 파라미터가 있으면 422 VALIDATION_FAILED다")
+    void invalidRequest(String query) throws Exception {
+        for (User viewer : new User[] {member, leader}) {
+            perform(viewer, query)
+                    .andExpect(status().is(422))
+                    .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        }
+    }
+
+    @Test
+    @DisplayName("v3 경로는 더 이상 제공하지 않는다")
+    void oldPathIsRemoved() throws Exception {
+        mockMvc.perform(fixture.get(leader, "/api/v1/teams/" + team.getId() + "/filter-options?scope=ME"))
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @DisplayName("토큰 없이 요청하면 401 AUTH_REQUIRED로 응답한다")
     void withoutToken() throws Exception {
-        mockMvc.perform(get(url(team.getId())))
+        mockMvc.perform(get(url(team.getId()) + "?scope=ME"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
     }
 
-    private ResultActions perform(User user, String url) throws Exception {
-        return mockMvc.perform(fixture.get(user, url));
+    private ResultActions perform(User user, String query) throws Exception {
+        return mockMvc.perform(fixture.get(user, url(team.getId()) + query));
     }
 
     private String url(Long teamId) {
-        return "/api/v1/teams/" + teamId + "/filter-options";
-    }
-
-    /** 대화의 팀은 upload의 팀을 따른다 */
-    private void saveConversation(Upload upload, User user, TeamTaskType taskType, String model, LocalDate date) {
-        fixture.save(fixture.conversation(upload, user, taskType, date).model(model));
+        return "/api/v1/teams/" + teamId + "/dashboard/filter-options";
     }
 }

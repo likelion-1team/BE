@@ -9,6 +9,7 @@ import com.babylion.team1.domain.upload.repository.UploadCandidateRepository;
 import com.babylion.team1.domain.upload.repository.UploadRepository;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
+import com.babylion.team1.global.policy.ServerPolicy;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
@@ -29,7 +30,7 @@ public class UploadCandidateQueryService {
     public UploadCandidatesResponse getCandidates(Long uploadId, Long userId, String query, int page, int size) {
         var upload = uploads.findById(uploadId).filter(row -> row.isUploadedBy(userId))
                 .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
-        if (!upload.getUploadedAt().plusHours(1).isAfter(LocalDateTime.now())) {
+        if (!upload.getUploadedAt().plusMinutes(ServerPolicy.UPLOAD_RETENTION_MINUTES).isAfter(LocalDateTime.now())) {
             throw new CustomException(ErrorCode.UPLOAD_EXPIRED);
         }
         if (page < 1 || size < 1 || size > 100) {

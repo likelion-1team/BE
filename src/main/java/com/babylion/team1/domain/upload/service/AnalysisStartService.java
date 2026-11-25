@@ -26,6 +26,7 @@ import com.babylion.team1.domain.upload.repository.UploadRepository;
 import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
+import com.babylion.team1.global.policy.ServerPolicy;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import java.nio.charset.StandardCharsets;
@@ -98,7 +99,7 @@ public class AnalysisStartService {
         try {
             var source = reader.readSelected(storage.pathFor(uploadId), zipped, externalIds);
             var turns = source.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey,
-                    entry -> ChatGptConversationBranch.restore(entry.getValue())));
+                    entry -> ChatGptConversationBranch.restoreWithAttachments(entry.getValue())));
             return new PreparedSource(turns, null);
         } catch (CustomException exception) {
             // A concurrent request may have consumed the upload while the file was being read.
@@ -133,7 +134,8 @@ public class AnalysisStartService {
             throw new CustomException(ErrorCode.UPLOAD_CONSUMED);
         }
         var file = storage.pathFor(uploadId);
-        if (!Files.isRegularFile(file) || !upload.getUploadedAt().plusHours(1).isAfter(LocalDateTime.now())) {
+        if (!Files.isRegularFile(file) || !upload.getUploadedAt()
+                .plusMinutes(ServerPolicy.UPLOAD_RETENTION_MINUTES).isAfter(LocalDateTime.now())) {
             throw new CustomException(ErrorCode.UPLOAD_EXPIRED);
         }
         var current = settings.findByTeamId(teamId).orElseThrow(() -> new CustomException(ErrorCode.VERSION_CONFLICT));
@@ -159,7 +161,7 @@ public class AnalysisStartService {
         if (prepared.error() != null) {
             throw prepared.error();
         }
-        if (selected.stream().anyMatch(candidate -> !prepared.turns().containsKey(candidate.getExternalId()))) {
+        if (selected.stream().anyMatch(candidate -> !prepared.conversations().containsKey(candidate.getExternalId()))) {
             throw new CustomException(ErrorCode.VALIDATION_FAILED);
         }
 
@@ -168,8 +170,8 @@ public class AnalysisStartService {
                 .selectedCount(selected.size()).build());
         for (UploadCandidate candidate : selected) {
             var taskType = allowedTypes.get(selections.get(candidate.getSelectionId()));
-            var turns = prepared.turns().get(candidate.getExternalId());
-            var version = saveVersion(upload, candidate, taskType, turns);
+            var source = prepared.conversations().get(candidate.getExternalId());
+            var version = saveVersion(upload, candidate, taskType, source);
             items.save(AnalysisItem.builder().analysis(analysis).version(version).team(upload.getTeam())
                     .user(upload.getUploader()).taskType(taskType).taskNameSnapshot(taskType.getName())
                     .successDefinitionSnapshot(taskType.getSuccessDefinition())
@@ -180,7 +182,8 @@ public class AnalysisStartService {
     }
 
     private ConversationVersion saveVersion(Upload upload, UploadCandidate candidate, TeamTaskType taskType,
-                                             java.util.List<ChatGptConversationBranch.Turn> turns) {
+                                             ChatGptConversationBranch.RestoredConversation source) {
+        var turns = source.turns();
         var date = candidate.getStartedAt().toLocalDate();
         var conversation = conversations.findByTeamIdAndUserIdAndExternalId(upload.getTeam().getId(),
                 upload.getUploader().getId(), candidate.getExternalId()).orElseGet(() ->
@@ -203,7 +206,7 @@ public class AnalysisStartService {
         var version = versions.save(ConversationVersion.builder().conversation(conversation).sourceUpload(upload)
                 .inputVersion(inputVersion).contentHash(candidate.getContentHash()).title(candidate.getTitle())
                 .startedAt(candidate.getStartedAt().atZone(KST).toInstant()).conversationDate(date)
-                .turnCount(turns.size()).build());
+                .turnCount(turns.size()).excludedAttachments(source.excludedAttachments()).build());
         var rows = new ArrayList<Message>(turns.size());
         for (int index = 0; index < turns.size(); index++) {
             var turn = turns.get(index);
@@ -230,7 +233,8 @@ public class AnalysisStartService {
 
     private static LinkedHashMap<String, Long> validateSelections(AnalysisStartRequest request) {
         if (request.settingsVersion() == null || request.settingsVersion() < 0 || request.selections() == null
-                || request.selections().isEmpty() || request.selections().size() > 100) {
+                || request.selections().isEmpty()
+                || request.selections().size() > ServerPolicy.MAX_SELECTIONS_PER_REQUEST) {
             throw new CustomException(ErrorCode.VALIDATION_FAILED);
         }
         var selections = new LinkedHashMap<String, Long>();
@@ -258,7 +262,7 @@ public class AnalysisStartService {
         }
     }
 
-    private record PreparedSource(Map<String, List<ChatGptConversationBranch.Turn>> turns, CustomException error) {
+    private record PreparedSource(Map<String, ChatGptConversationBranch.RestoredConversation> conversations, CustomException error) {
     }
 
     private static AnalysisStartResponse response(Analysis analysis) {

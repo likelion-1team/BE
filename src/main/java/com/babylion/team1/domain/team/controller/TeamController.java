@@ -1,29 +1,30 @@
 package com.babylion.team1.domain.team.controller;
 
-import com.babylion.team1.domain.feedback.dto.request.MyFeedbackSort;
-import com.babylion.team1.domain.feedback.dto.response.GuidesResponse;
+import com.babylion.team1.domain.feedback.dto.request.GuideAddRequest;
+import com.babylion.team1.domain.feedback.dto.response.GuideAddResponse;
 import com.babylion.team1.domain.feedback.dto.response.MyFeedbackListResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
-import com.babylion.team1.domain.team.dto.request.TeamSettingsUpdateRequest;
-import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
+import com.babylion.team1.domain.team.dto.response.MyTeamsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
-import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
-import com.babylion.team1.domain.team.dto.response.TeamSettingsResponse;
-import com.babylion.team1.domain.team.dto.response.TeamSettingsUpdateResponse;
+import com.babylion.team1.domain.team.dto.response.TeamMembersResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
 import com.babylion.team1.domain.team.service.TeamService;
+import com.babylion.team1.global.exception.CustomException;
+import com.babylion.team1.global.exception.ErrorCode;
 import com.babylion.team1.global.response.ApiResponse;
+import com.babylion.team1.global.response.FieldErrorResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
-import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.validation.BindingResult;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -46,14 +47,21 @@ public class TeamController {
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<TeamCreateResponse> createTeam(
             @AuthenticationPrincipal Long userId,
-            @Valid @RequestBody TeamCreateRequest request) {
+            @Valid @RequestBody TeamCreateRequest request,
+            BindingResult validation) {
+        if (validation.hasErrors()) {
+            throw CustomException.withErrors(ErrorCode.VALIDATION_FAILED, FieldErrorResponse.listFrom(validation));
+        }
         return ApiResponse.success("S201", "팀 생성 성공", teamService.createTeam(userId, request));
     }
 
     @Operation(summary = "내 팀 목록 조회")
     @GetMapping
-    public ApiResponse<List<MyTeamResponse>> getMyTeams(@AuthenticationPrincipal Long userId) {
-        return ApiResponse.success("S200", "조회 성공", teamService.getMyTeams(userId));
+    public ApiResponse<MyTeamsResponse> getMyTeams(
+            @AuthenticationPrincipal Long userId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getMyTeams(userId, page, size));
     }
 
     @Operation(summary = "팀원 추가")
@@ -68,10 +76,12 @@ public class TeamController {
 
     @Operation(summary = "팀원 목록 및 제출 여부 조회")
     @GetMapping("/{teamId}/members")
-    public ApiResponse<List<TeamMemberListResponse>> getTeamMembers(
+    public ApiResponse<TeamMembersResponse> getTeamMembers(
             @PathVariable Long teamId,
-            @AuthenticationPrincipal Long userId) {
-        return ApiResponse.success("S200", "조회 성공", teamService.getTeamMembers(teamId, userId));
+            @AuthenticationPrincipal Long userId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getTeamMembers(teamId, userId, page, size));
     }
 
     @Operation(summary = "팀 제출 현황 조회",
@@ -83,19 +93,19 @@ public class TeamController {
         return ApiResponse.success("S200", "조회 성공", teamService.getTeamSubmissions(teamId, userId));
     }
 
-    @Operation(summary = "내 피드백 목록 조회",
-            description = "날짜 그룹은 최신순으로 한 페이지에 20개씩 반환합니다. sort는 각 그룹 안에 적용합니다.")
+    @Operation(summary = "내 피드백 목록 조회")
     @GetMapping("/{teamId}/feedbacks")
     public ApiResponse<MyFeedbackListResponse> getMyFeedbacks(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-            @RequestParam(required = false) List<String> types,
-            @RequestParam(defaultValue = "LATEST") MyFeedbackSort sort,
-            @RequestParam(defaultValue = "0") int page) {
+            @RequestParam(required = false) String type,
+            @RequestParam(defaultValue = "LATEST") String sort,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.success("S200", "조회 성공",
-                teamService.getMyFeedbacks(teamId, userId, from, to, types, sort, page));
+                teamService.getMyFeedbacks(teamId, userId, from, to, type, sort, page, size));
     }
 
     @Operation(summary = "공유 사례 목록 조회")
@@ -103,34 +113,41 @@ public class TeamController {
     public ApiResponse<SharedCasesResponse> getSharedCases(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
-            @RequestParam(name = "taskType", required = false) Long taskTypeId,
-            @RequestParam(required = false) String type) {
-        return ApiResponse.success("S200", "조회 성공", teamService.getSharedCases(teamId, userId, taskTypeId, type));
+            @RequestParam(required = false) String type,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getSharedCases(teamId, userId, type, page, size));
     }
 
     @Operation(summary = "가이드 목록 조회")
     @GetMapping("/{teamId}/guides")
-    public ApiResponse<GuidesResponse> getGuides(
+    public ApiResponse<SharedCasesResponse> getGuides(
             @PathVariable Long teamId,
             @AuthenticationPrincipal Long userId,
-            @RequestParam(required = false) String type) {
-        return ApiResponse.success("S200", "조회 성공", teamService.getGuides(teamId, userId, type));
+            @RequestParam(required = false) String type,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getGuides(teamId, userId, type, page, size));
     }
 
-    @Operation(summary = "분석 대상·평가 기준 조회")
-    @GetMapping("/{teamId}/settings")
-    public ApiResponse<TeamSettingsResponse> getSettings(
+    @Operation(summary = "개선 가이드 지정")
+    @PutMapping("/{teamId}/guides/{sharedCaseId}")
+    public ApiResponse<GuideAddResponse> addGuide(
             @PathVariable Long teamId,
+            @PathVariable Long sharedCaseId,
+            @AuthenticationPrincipal Long userId,
+            @Valid @RequestBody GuideAddRequest request) {
+        return ApiResponse.success("S200", "가이드 지정 성공",
+                teamService.addGuide(teamId, sharedCaseId, userId, request.expectedShareVersion()));
+    }
+
+    @Operation(summary = "개선 가이드 해제")
+    @DeleteMapping("/{teamId}/guides/{sharedCaseId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void removeGuide(
+            @PathVariable Long teamId,
+            @PathVariable Long sharedCaseId,
             @AuthenticationPrincipal Long userId) {
-        return ApiResponse.success("S200", "조회 성공", teamService.getSettings(teamId, userId));
-    }
-
-    @Operation(summary = "분석 대상 설정")
-    @PutMapping("/{teamId}/settings")
-    public ApiResponse<TeamSettingsUpdateResponse> updateSettings(
-            @PathVariable Long teamId,
-            @AuthenticationPrincipal Long userId,
-            @Valid @RequestBody TeamSettingsUpdateRequest request) {
-        return ApiResponse.success("S200", "설정 저장 성공", teamService.updateSettings(teamId, userId, request));
+        teamService.removeGuide(teamId, sharedCaseId, userId);
     }
 }

@@ -3,6 +3,7 @@ package com.babylion.team1.domain.upload.entity;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.user.entity.User;
+import com.babylion.team1.global.policy.ServerPolicy;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -112,6 +113,16 @@ public class Upload {
 	public void consume() {
 		status = UploadStatus.CONSUMED;
 		consumedAt = LocalDateTime.now();
+	}
+
+	public enum LifecycleStatus { READY, CONSUMED, EXPIRED }
+
+	public LifecycleStatus lifecycleStatus(LocalDateTime now) {
+		return switch (status) {
+			case CONSUMED, DONE, ANALYZING -> LifecycleStatus.CONSUMED;
+			case UPLOADED, FAILED -> uploadedAt.plusMinutes(ServerPolicy.UPLOAD_RETENTION_MINUTES).isAfter(now)
+					? LifecycleStatus.READY : LifecycleStatus.EXPIRED;
+		};
 	}
 
 	public boolean isUploadedBy(Long userId) {

@@ -1,37 +1,28 @@
 package com.babylion.team1.domain.dashboard.dto.request;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import java.time.LocalDate;
-import java.util.List;
-import org.springframework.format.annotation.DateTimeFormat;
 
 /**
- * 추이 조회 조건. metric만 필수다.
- * metric은 서비스에서 TrendMetric으로 바꾸며, 없거나 잘못되면 400 INVALID_REQUEST.
- * 나머지는 KPI 카드와 같다. from·to를 비우면 team_settings의 대상 기간을 쓴다(양 끝 포함, KST).
- * 날짜·unit·taskTypes 형식이 잘못되면 바인딩 단계에서 400 INVALID_REQUEST로 응답한다.
- * scope는 집계 범위(ME·TEAM)다. 생략하면 팀장은 TEAM, 팀원은 ME. 팀원이 TEAM을 보내면 403 LEADER_ONLY.
+ * 추이 조회 조건. ME는 from·to(최대 366일), TEAM은 weekStart가 필수다.
+ * 값이 잘못됐을 때 400이 아니라 422 VALIDATION_FAILED로 응답하도록 문자열로 받아 서비스에서 검증한다.
  */
 public record TrendRequest(
+        @Schema(requiredMode = Schema.RequiredMode.REQUIRED, allowableValues = {"ME", "TEAM"})
+        String scope,
+        @Schema(description = "ME 필수. 시작일(KST, 포함)", format = "date")
+        String from,
+        @Schema(description = "ME 필수. 종료일(KST, 포함)", format = "date")
+        String to,
+        @Schema(description = "TEAM 필수. 완료된 주의 월요일(KST)", format = "date")
+        String weekStart,
+        @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "분석 기준 버전", type = "integer")
+        String settingsVersion,
         @Schema(requiredMode = Schema.RequiredMode.REQUIRED, allowableValues = {
-                "tokensPerSuccess", "reworkRate", "successRate", "costPerSuccess", "humanTime", "conversationCount"})
+                "confirmedSuccessRate", "outcomeConfirmationRate", "errorReworkRate", "reworkConfirmationRate",
+                "tokensPerConfirmedSuccess"})
         String metric,
-        @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
-        @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-        KpiUnit unit,
-        List<Long> taskTypes,
-        List<String> models,
-        DashboardScope scope
+        @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "TEAM은 WEEK만 가능",
+                allowableValues = {"DAY", "WEEK"})
+        String unit
 ) {
-
-    public TrendRequest {
-        unit = unit != null ? unit : KpiUnit.DAY;
-        taskTypes = taskTypes != null
-                ? taskTypes.stream().filter(id -> id != null).distinct().toList()
-                : List.of();
-        models = models != null
-                ? models.stream().filter(model -> model != null).map(String::trim)
-                        .filter(model -> !model.isEmpty()).distinct().toList()
-                : List.of();
-    }
 }
