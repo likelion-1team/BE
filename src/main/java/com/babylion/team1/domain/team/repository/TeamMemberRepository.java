@@ -6,6 +6,8 @@ import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
 import com.babylion.team1.domain.team.entity.TeamMember;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -17,17 +19,19 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 
 	long countByTeamId(Long teamId);
 
-	@Query("""
+	@Query(value = """
 		select new com.babylion.team1.domain.team.dto.response.MyTeamResponse(
-			team.id, team.name, membership.role, count(rosterMember.id))
+			team.id, team.name, team.description, membership.role, count(rosterMember.id))
 		from TeamMember membership
 		join membership.team team
 		join TeamMember rosterMember on rosterMember.team = team
 		where membership.user.id = :userId
-		group by team.id, team.name, membership.role, team.createdAt
+		group by team.id, team.name, team.description, membership.role, team.createdAt
 		order by team.createdAt desc, team.id desc
+		""", countQuery = """
+		select count(membership.id) from TeamMember membership where membership.user.id = :userId
 		""")
-	List<MyTeamResponse> findMyTeams(@Param("userId") Long userId);
+	Page<MyTeamResponse> findMyTeams(@Param("userId") Long userId, Pageable pageable);
 
 	String V4_SUBMISSION = """
 			item.team = membership.team
