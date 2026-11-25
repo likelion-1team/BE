@@ -185,11 +185,13 @@ class TeamMemberListControllerIntegrationTest {
         submissions(fixture.team().getId(), fixture.leader())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
-                .andExpect(jsonPath("$.data.length()").value(4))
+                .andExpect(jsonPath("$.data.length()").value(7))
                 .andExpect(jsonPath("$.data.submittedMembers").value(2))
                 .andExpect(jsonPath("$.data.totalMembers").value(3))
-                .andExpect(jsonPath("$.data.analyzedConversations").value(3))
-                .andExpect(jsonPath("$.data.targetCount").value(120));
+                .andExpect(jsonPath("$.data.analyzedConversations").value(nullValue()))
+                .andExpect(jsonPath("$.data.targetCount").value(nullValue()))
+                .andExpect(jsonPath("$.data.coverageRatio").value(nullValue()))
+                .andExpect(jsonPath("$.data.status").value("SUPPRESSED"));
     }
 
     @Test
@@ -202,7 +204,7 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.submittedMembers").value(0))
                 .andExpect(jsonPath("$.data.totalMembers").value(2))
-                .andExpect(jsonPath("$.data.analyzedConversations").value(0))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(nullValue()))
                 .andExpect(jsonPath("$.data.targetCount").value(nullValue()));
     }
 
@@ -213,14 +215,15 @@ class TeamMemberListControllerIntegrationTest {
         User outsider = saveUser("다른 팀장");
         createTeam(outsider);
 
-        for (User nonLeader : new User[]{member, outsider}) {
-            submissions(fixture.team().getId(), nonLeader)
-                    .andExpect(status().isForbidden())
-                    .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
-        }
+        submissions(fixture.team().getId(), member)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
+        submissions(fixture.team().getId(), outsider)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         submissions(Long.MAX_VALUE, fixture.leader())
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("TEAM_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(get("/api/v1/teams/{teamId}/submissions", fixture.team().getId()))
                 .andExpect(status().isUnauthorized());
     }
@@ -255,12 +258,19 @@ class TeamMemberListControllerIntegrationTest {
 
         saveConversation(fixture, fixture.leader(), FROM, UploadStatus.DONE);
 
+        for (int index = 0; index < 4; index++) {
+            saveConversation(fixture, addMember(fixture, "기여자 " + index), FROM, UploadStatus.DONE);
+        }
+
         submissions(fixture.team().getId(), fixture.leader())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.submittedMembers").value(1))
-                .andExpect(jsonPath("$.data.totalMembers").value(2))
-                .andExpect(jsonPath("$.data.analyzedConversations").value(1))
-                .andExpect(jsonPath("$.data.targetCount").value(200));
+                .andExpect(jsonPath("$.data.submittedMembers").value(5))
+                .andExpect(jsonPath("$.data.totalMembers").value(6))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(5))
+                .andExpect(jsonPath("$.data.targetCount").value(200))
+                .andExpect(jsonPath("$.data.settingsVersion").value(2))
+                .andExpect(jsonPath("$.data.coverageRatio").value(0.025))
+                .andExpect(jsonPath("$.data.status").value("AVAILABLE"));
     }
 
     @Test
@@ -279,7 +289,7 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.submittedMembers").value(1))
                 .andExpect(jsonPath("$.data.totalMembers").value(2))
-                .andExpect(jsonPath("$.data.analyzedConversations").value(2))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(nullValue()))
                 .andExpect(jsonPath("$.data.targetCount").value(nullValue()));
     }
 
@@ -297,7 +307,7 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.submittedMembers").value(0))
                 .andExpect(jsonPath("$.data.totalMembers").value(2))
-                .andExpect(jsonPath("$.data.analyzedConversations").value(0));
+                .andExpect(jsonPath("$.data.analyzedConversations").value(nullValue()));
     }
 
     @Test
@@ -323,10 +333,22 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(jsonPath("$.data[1].submitted").value(true))
                 .andExpect(jsonPath("$.data[2].submitted").value(false));
         submissions(fixture.team().getId(), fixture.leader()).andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.submittedMembers").value(1))
+                .andExpect(jsonPath("$.data.submittedMembers").value(2))
                 .andExpect(jsonPath("$.data.totalMembers").value(3))
-                .andExpect(jsonPath("$.data.analyzedConversations").value(2))
-                .andExpect(jsonPath("$.data.targetCount").value(200));
+                .andExpect(jsonPath("$.data.analyzedConversations").value(nullValue()))
+                .andExpect(jsonPath("$.data.targetCount").value(nullValue()));
+
+        for (int index = 0; index < 4; index++) {
+            saveAnalysisItem(fixture, addMember(fixture, "공개 기준 기여자 " + index), current,
+                    AnalysisItemStatus.SUCCEEDED, true, false);
+        }
+        submissions(fixture.team().getId(), fixture.leader()).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.submittedMembers").value(6))
+                .andExpect(jsonPath("$.data.totalMembers").value(7))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(6))
+                .andExpect(jsonPath("$.data.targetCount").value(200))
+                .andExpect(jsonPath("$.data.coverageRatio").value(0.03))
+                .andExpect(jsonPath("$.data.status").value("AVAILABLE"));
     }
 
     private void saveAnalysisItem(TeamFixture fixture, User user, TeamSettings settings, AnalysisItemStatus status,

@@ -19,6 +19,10 @@ import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
+import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse.Status;
+import com.babylion.team1.global.policy.ServerPolicy;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import com.babylion.team1.domain.team.entity.Team;
 import com.babylion.team1.domain.team.entity.TeamGoal;
 import com.babylion.team1.domain.team.entity.TeamMember;
@@ -111,11 +115,22 @@ public class TeamService {
 
     @Transactional(readOnly = true)
     public TeamSubmissionResponse getTeamSubmissions(Long teamId, Long userId) {
-        findTeam(teamId);
-        teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
-                .filter(TeamMember::isLeader)
-                .orElseThrow(() -> new CustomException(ErrorCode.LEADER_ONLY));
-        return teamMemberRepository.findTeamSubmissionSummary(teamId);
+        var membership = teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        if (!membership.isLeader()) {
+            throw new CustomException(ErrorCode.ROLE_FORBIDDEN);
+        }
+        var summary = teamMemberRepository.findTeamSubmissionSummary(teamId);
+        if (summary.contributors() < ServerPolicy.MIN_TEAM_CONTRIBUTORS) {
+            return new TeamSubmissionResponse(summary.settingsVersion(), summary.submittedMembers(),
+                    summary.totalMembers(), null, null, null, Status.SUPPRESSED);
+        }
+        Integer targetCount = summary.targetCount();
+        BigDecimal coverageRatio = targetCount == null || targetCount <= 0 ? null
+                : BigDecimal.valueOf(summary.analyzedConversations())
+                        .divide(BigDecimal.valueOf(targetCount), 8, RoundingMode.HALF_UP).stripTrailingZeros();
+        return new TeamSubmissionResponse(summary.settingsVersion(), summary.submittedMembers(),
+                summary.totalMembers(), summary.analyzedConversations(), targetCount, coverageRatio, Status.AVAILABLE);
     }
 
     @Transactional(readOnly = true)
