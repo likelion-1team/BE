@@ -25,6 +25,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Slf4j
 class VersionedAnalysisWorker {
 
+    private static final int MAX_WORKER_ATTEMPTS = 3;
+
     private final AnalysisRepository analyses;
     private final AnalysisItemRepository items;
     private final MessageRepository messages;
@@ -68,7 +70,9 @@ class VersionedAnalysisWorker {
         }
         try {
             Result result = analyze(analysisId, input);
-            transaction.executeWithoutResult(status -> save(analysisId, input.itemId(), result));
+            if (result != null) {
+                transaction.executeWithoutResult(status -> save(analysisId, input, result));
+            }
         } catch (RuntimeException exception) {
             String code = exception instanceof GeminiFeedbackClient.ModelFailure
                     ? exception.getMessage() : "ANALYSIS_FAILED";
@@ -76,7 +80,7 @@ class VersionedAnalysisWorker {
             transaction.executeWithoutResult(status -> {
                 var job = analyses.lockById(analysisId).orElseThrow();
                 var item = items.findById(input.itemId()).orElseThrow();
-                if (item.getStatus() == AnalysisItemStatus.RUNNING) {
+                if (item.isRunningAttempt(input.attempt())) {
                     item.fail(code);
                     job.recordResult(false);
                 }
@@ -86,12 +90,15 @@ class VersionedAnalysisWorker {
 
     private Input claim(Long analysisId) {
         var job = analyses.lockById(analysisId).orElseThrow();
-        // Do not repeat model calls for claims abandoned by a stopped worker.
         var now = Instant.now();
         for (var expired : items.findByAnalysisIdAndStatusAndClaimExpiresAtBefore(
                 analysisId, AnalysisItemStatus.RUNNING, now)) {
-            expired.fail("WORKER_TIMEOUT");
-            job.recordResult(false);
+            if (expired.getAttemptCount() < MAX_WORKER_ATTEMPTS) {
+                expired.requeue();
+            } else {
+                expired.fail("WORKER_TIMEOUT");
+                job.recordResult(false);
+            }
         }
         var item = items.findFirstByAnalysisIdAndStatusOrderByIdAsc(analysisId, AnalysisItemStatus.QUEUED)
                 .orElse(null);
@@ -116,7 +123,7 @@ class VersionedAnalysisWorker {
             taskName = item.getTaskType().getName();
             successDefinition = item.getTaskType().getSuccessDefinition();
         }
-        return new Input(item.getId(), taskName, successDefinition, turns);
+        return new Input(item.getId(), item.getAttemptCount(), taskName, successDefinition, turns);
     }
 
     private List<GeminiFeedbackClient.AssessmentMessage> assessmentMessages(
@@ -134,8 +141,9 @@ class VersionedAnalysisWorker {
         return transcript;
     }
 
-    private Consumer<GeminiFeedbackClient.Attempt> audit(Long itemId, ModelCall.Purpose purpose) {
+    private Consumer<GeminiFeedbackClient.Attempt> audit(Long analysisId, Long itemId, ModelCall.Purpose purpose) {
         return attempt -> transaction.executeWithoutResult(status -> {
+            analyses.lockById(analysisId).orElseThrow();
             var cost = attempt.inputTokens() == null || attempt.outputTokens() == null ? null
                     : pricing.cost(pricing.rate(attempt.model()), attempt.inputTokens(), attempt.outputTokens());
             modelCalls.save(ModelCall.builder().item(items.getReferenceById(itemId)).purpose(purpose)
@@ -149,18 +157,20 @@ class VersionedAnalysisWorker {
     private Result analyze(Long analysisId, Input input) {
         var turns = input.turns();
         var assessment = gemini.assess(input.taskName(), input.successDefinition(), assessmentMessages(turns),
-                audit(input.itemId(), ModelCall.Purpose.ASSESSMENT));
+                audit(analysisId, input.itemId(), ModelCall.Purpose.ASSESSMENT));
         var result = metrics.calculate(turns);
-        var feedbackAudit = audit(input.itemId(), ModelCall.Purpose.FEEDBACK);
+        var feedbackAudit = audit(analysisId, input.itemId(), ModelCall.Purpose.FEEDBACK);
         var findings = rules.detect(result).stream().filter(finding -> !finding.evidence().isEmpty()
                 && finding.evidence().stream().allMatch(index -> index >= 0 && index < turns.size())).toList();
-        if (!findings.isEmpty()) {
-            transaction.executeWithoutResult(status -> {
-                var job = analyses.lockById(analysisId).orElseThrow();
-                if (items.findById(input.itemId()).orElseThrow().getStatus() == AnalysisItemStatus.RUNNING) {
-                    job.updateStage(Stage.GENERATING_FEEDBACK);
-                }
-            });
+        if (!findings.isEmpty() && !Boolean.TRUE.equals(transaction.execute(status -> {
+            var job = analyses.lockById(analysisId).orElseThrow();
+            if (!items.findById(input.itemId()).orElseThrow().isRunningAttempt(input.attempt())) {
+                return false;
+            }
+            job.updateStage(Stage.GENERATING_FEEDBACK);
+            return true;
+        }))) {
+            return null;
         }
         var suggestions = findings.stream().map(finding -> {
                     String question = turns.get(finding.evidence().get(0)).content();
@@ -172,12 +182,12 @@ class VersionedAnalysisWorker {
         return new Result(assessment, result, suggestions);
     }
 
-    private void save(Long analysisId, Long itemId, Result output) {
+    private void save(Long analysisId, Input input, Result output) {
         var job = analyses.lockById(analysisId).orElseThrow();
         // Lock before the first snapshot read so concurrent versions see the latest promotion.
         teams.findByIdForUpdate(job.getTeam().getId()).orElseThrow();
-        var item = items.findById(itemId).orElseThrow();
-        if (item.getStatus() != AnalysisItemStatus.RUNNING) {
+        var item = items.findById(input.itemId()).orElseThrow();
+        if (!item.isRunningAttempt(input.attempt())) {
             return;
         }
         var version = item.getVersion();
@@ -215,7 +225,7 @@ class VersionedAnalysisWorker {
         item.succeed(tokens, gemini.model(), promote);
         job.recordResult(true);
     }
-    private record Input(Long itemId, String taskName, String successDefinition,
+    private record Input(Long itemId, int attempt, String taskName, String successDefinition,
                          List<ChatGptConversationBranch.Turn> turns) {
     }
 

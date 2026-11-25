@@ -346,6 +346,9 @@ class UploadControllerIntegrationTest {
                 select m.content from messages m join analysis_items i on i.version_id = m.version_id
                 where i.analysis_id = ? order by m.idx
                 """, String.class, analysisId)).containsExactly("hello", "world");
+        if (!commit) {
+            verifyWorkerTimeoutRetries(analysisId);
+        }
         if (commit) {
             var gemini = applicationContext.getBean("geminiFeedbackClient");
             var originalHttp = ReflectionTestUtils.getField(gemini, "http");
@@ -594,6 +597,35 @@ class UploadControllerIntegrationTest {
                 ReflectionTestUtils.setField(gemini, "apiKey", originalKey);
             }
         }
+    }
+
+    private void verifyWorkerTimeoutRetries(Long analysisId) {
+        var worker = applicationContext.getBean("versionedAnalysisWorker");
+        var first = ReflectionTestUtils.invokeMethod(worker, "claim", analysisId);
+        assertThat(first).isNotNull();
+
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            entityManager.flush();
+            assertThat(jdbc.queryForObject("select attempt_count from analysis_items where analysis_id = ?",
+                    Integer.class, analysisId)).isEqualTo(attempt);
+            jdbc.update("update analysis_items set claim_expires_at = ? where analysis_id = ?",
+                    java.time.LocalDateTime.of(2000, 1, 1, 0, 0), analysisId);
+            entityManager.clear();
+            var next = ReflectionTestUtils.invokeMethod(worker, "claim", analysisId);
+            if (attempt < 3) {
+                assertThat(next).isNotNull();
+                ReflectionTestUtils.invokeMethod(worker, "save", analysisId, first, null);
+                assertThat(jdbc.queryForObject("select completed_count from analyses where id = ?",
+                        Integer.class, analysisId)).isZero();
+            } else {
+                assertThat(next).isNull();
+            }
+        }
+        entityManager.flush();
+        assertThat(jdbc.queryForMap("select status, failure_code from analysis_items where analysis_id = ?", analysisId))
+                .containsEntry("status", "FAILED").containsEntry("failure_code", "WORKER_TIMEOUT");
+        assertThat(jdbc.queryForMap("select status, completed_count, failed_count from analyses where id = ?", analysisId))
+                .containsEntry("status", "FAILED").containsEntry("completed_count", 1).containsEntry("failed_count", 1);
     }
 
     @ParameterizedTest
