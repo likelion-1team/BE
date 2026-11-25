@@ -21,6 +21,7 @@ import java.time.Instant;
 import com.babylion.team1.domain.analysis.entity.Analysis;
 import com.babylion.team1.domain.analysis.entity.AnalysisItem;
 import com.babylion.team1.domain.analysis.entity.AnalysisItemStatus;
+import com.babylion.team1.domain.analysis.entity.ScopeClassification;
 import com.babylion.team1.domain.conversation.entity.ConversationVersion;
 import java.util.UUID;
 import java.util.List;
@@ -291,7 +292,7 @@ class TeamMemberListControllerIntegrationTest {
     }
 
     @Test
-    void summarizesSubmissionsWithTheLatestTargetCount() throws Exception {
+    void suppressesLegacyOnlySubmissionsUnderTheLatestSettings() throws Exception {
         TeamFixture fixture = createTeam(saveUser("팀장"));
         addMember(fixture, "미제출 팀원");
         TeamSettings initial = saveInitialSettings(fixture.team());
@@ -308,11 +309,11 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.submittedMembers").value(5))
                 .andExpect(jsonPath("$.data.totalMembers").value(6))
-                .andExpect(jsonPath("$.data.analyzedConversations").value(5))
-                .andExpect(jsonPath("$.data.targetCount").value(200))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(nullValue()))
+                .andExpect(jsonPath("$.data.targetCount").value(nullValue()))
                 .andExpect(jsonPath("$.data.settingsVersion").value(2))
-                .andExpect(jsonPath("$.data.coverageRatio").value(0.025))
-                .andExpect(jsonPath("$.data.status").value("AVAILABLE"));
+                .andExpect(jsonPath("$.data.coverageRatio").value(nullValue()))
+                .andExpect(jsonPath("$.data.status").value("SUPPRESSED"));
     }
 
     @Test
@@ -380,6 +381,8 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.analyzedConversations").value(nullValue()))
                 .andExpect(jsonPath("$.data.targetCount").value(nullValue()));
 
+        saveAnalysisItem(fixture, pending, current, AnalysisItemStatus.SUCCEEDED, true, false,
+                ScopeClassification.OUT_OF_SCOPE);
         for (int index = 0; index < 4; index++) {
             saveAnalysisItem(fixture, addMember(fixture, "공개 기준 기여자 " + index), current,
                     AnalysisItemStatus.SUCCEEDED, true, false);
@@ -387,14 +390,19 @@ class TeamMemberListControllerIntegrationTest {
         submissions(fixture.team().getId(), fixture.leader()).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.submittedMembers").value(6))
                 .andExpect(jsonPath("$.data.totalMembers").value(7))
-                .andExpect(jsonPath("$.data.analyzedConversations").value(6))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(7))
                 .andExpect(jsonPath("$.data.targetCount").value(200))
-                .andExpect(jsonPath("$.data.coverageRatio").value(0.03))
+                .andExpect(jsonPath("$.data.coverageRatio").value(0.035))
                 .andExpect(jsonPath("$.data.status").value("AVAILABLE"));
     }
 
     private void saveAnalysisItem(TeamFixture fixture, User user, TeamSettings settings, AnalysisItemStatus status,
                                   boolean current, boolean deleted) {
+        saveAnalysisItem(fixture, user, settings, status, current, deleted, ScopeClassification.IN_SCOPE);
+    }
+
+    private void saveAnalysisItem(TeamFixture fixture, User user, TeamSettings settings, AnalysisItemStatus status,
+                                  boolean current, boolean deleted, ScopeClassification scope) {
         Upload upload = Upload.builder().team(fixture.team()).uploader(user).settings(settings)
                 .fileName("conversations.json").conversationCount(1).build();
         upload.consume();
@@ -412,7 +420,7 @@ class TeamMemberListControllerIntegrationTest {
                 .idempotencyKey(UUID.randomUUID().toString()).requestHash("b".repeat(64)).selectedCount(1).build();
         entityManager.persist(analysis);
         entityManager.persist(AnalysisItem.builder().analysis(analysis).version(version).team(fixture.team()).user(user)
-                .taskType(fixture.type()).conversationDate(FROM).status(status).current(current).build());
+                .taskType(fixture.type()).conversationDate(FROM).status(status).current(current).scopeClassification(scope).build());
     }
 
     private ResultActions submissions(Long teamId, User user) throws Exception {

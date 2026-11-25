@@ -569,12 +569,14 @@ class SharedFeedbackControllerIntegrationTest {
         String validBody = "{\"reaction\":\"HELPFUL\"}";
 
         for (String body : List.of("{}", "{\"reaction\":\"UNKNOWN\"}",
-                "{\"reaction\":\"HELPFUL\",\"reason\":\"사유\"}",
                 "{\"reaction\":\"NOT_APPLICABLE\",\"reason\":\"" + "a".repeat(501) + "\"}")) {
             recordReaction(id, ownerToken, body)
                     .andExpect(status().isUnprocessableContent())
                     .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
         }
+        recordReaction(id, ownerToken, "{\"reaction\":\"HELPFUL\",\"reason\":\"사유\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.reason").value("사유"));
         recordReaction(id, leaderToken, validBody)
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
