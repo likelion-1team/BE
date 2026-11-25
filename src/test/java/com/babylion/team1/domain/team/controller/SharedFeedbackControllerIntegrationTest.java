@@ -611,12 +611,33 @@ class SharedFeedbackControllerIntegrationTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
         mockMvc.perform(delete(REACTION, id).header(HttpHeaders.AUTHORIZATION, leaderToken))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_FEEDBACK_OWNER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(delete(REACTION, Long.MAX_VALUE).header(HttpHeaders.AUTHORIZATION, ownerToken))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(delete(REACTION, id)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void reactionCannotBeCancelledWhenOriginalWasDeleted() throws Exception {
+        TeamFixture fixture = saveTeam();
+        Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "반응", null);
+        var conversation = entityManager.find(Conversation.class, addPrivateEvidence(feedback));
+        var version = saveConversationVersion(conversation, 1, "보호된 원문");
+        conversation.promote(version);
+        entityManager.flush();
+        String ownerToken = "Bearer " + accessTokens.create(fixture.member().getId());
+        recordReaction(feedback.getId(), ownerToken, """
+                {"reaction":"HELPFUL"}
+                """).andExpect(status().isOk());
+
+        jdbc.update("update conversation_versions set deleted_at = current_timestamp(6) where id = ?", version.getId());
+        mockMvc.perform(delete(REACTION, feedback.getId()).header(HttpHeaders.AUTHORIZATION, ownerToken))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        assertThat(jdbc.queryForObject("select count(*) from feedback_reactions where feedback_id = ?",
+                Long.class, feedback.getId())).isEqualTo(1L);
     }
 
     private ResultActions recordReaction(Long feedbackId, String token, String body) throws Exception {
