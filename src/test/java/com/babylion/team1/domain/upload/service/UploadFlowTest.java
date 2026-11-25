@@ -87,6 +87,7 @@ class UploadFlowTest {
     @BeforeEach
     void setUp() {
         settings = TeamSettings.createDefault(team);
+        ReflectionTestUtils.setField(settings, "version", 1);
         settings.updateTarget(DAY, DAY, null, null);
         when(members.findByTeamIdAndUserId(TEAM_ID, USER_ID))
                 .thenReturn(Optional.of(TeamMember.member(team, user)));
@@ -94,6 +95,7 @@ class UploadFlowTest {
         when(uploads.saveAndFlush(any(Upload.class))).thenAnswer(invocation -> {
             Upload upload = invocation.getArgument(0);
             ReflectionTestUtils.setField(upload, "id", UPLOAD_ID);
+            ReflectionTestUtils.setField(upload, "uploadedAt", DAY.atStartOfDay());
             return upload;
         });
 
@@ -129,12 +131,13 @@ class UploadFlowTest {
                 .andExpect(jsonPath("$.code").value("S201"))
                 .andExpect(jsonPath("$.message").value("업로드 성공"))
                 .andExpect(jsonPath("$.data.uploadId").value(UPLOAD_ID))
-                .andExpect(jsonPath("$.data.conversations.length()").value(2))
-                .andExpect(jsonPath("$.data.conversations[0].externalId").value("duplicate"))
-                .andExpect(jsonPath("$.data.conversations[0].title").value("테스트"))
-                .andExpect(jsonPath("$.data.conversations[0].startedAt").value("2026-11-10T00:00:00+09:00"))
-                .andExpect(jsonPath("$.data.conversations[0].isDuplicate").value(true))
-                .andExpect(jsonPath("$.data.conversations[1].isDuplicate").value(false));
+                .andExpect(jsonPath("$.data.status").value("READY"))
+                .andExpect(jsonPath("$.data.settingsVersion").value(1))
+                .andExpect(jsonPath("$.data.expiresAt").isString())
+                .andExpect(jsonPath("$.data.conversationCount").value(4))
+                .andExpect(jsonPath("$.data.eligibleConversationCount").value(2))
+                .andExpect(jsonPath("$.data.conversationsUrl").value("/api/v1/uploads/10/conversations"))
+                .andExpect(jsonPath("$.data.conversations").doesNotExist());
 
         ArgumentCaptor<Upload> captured = ArgumentCaptor.forClass(Upload.class);
         verify(uploads).saveAndFlush(captured.capture());
@@ -172,7 +175,7 @@ class UploadFlowTest {
 
         upload("export.zip", archive)
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.conversations[0].externalId").value("zip-id"));
+                .andExpect(jsonPath("$.data.eligibleConversationCount").value(1));
         assertThat(Files.readAllBytes(storage.pathFor(UPLOAD_ID))).isEqualTo(archive);
     }
 
@@ -180,37 +183,37 @@ class UploadFlowTest {
     void validExportWithNoConversationInTheTargetPeriodReturnsAnEmptyList() throws Exception {
         upload("conversations.json", bytes("[" + conversation("old", "2026-11-09T00:00:00Z") + "]"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.conversations").isEmpty());
+                .andExpect(jsonPath("$.data.eligibleConversationCount").value(0));
         verifyNoInteractions(conversations);
     }
 
     @Test
     void rejectsMalformedJsonAndMissingRequiredFieldsAndRemovesStagingFile() throws Exception {
         upload("conversations.json", bytes("[{\"id\":\"x\",\"mapping\":{}}]"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_FILE_FORMAT"));
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_STRUCTURE"));
         upload("conversations.json", bytes("[]{}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_FILE_FORMAT"));
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_STRUCTURE"));
         assertThat(directory).isEmptyDirectory();
         verifyNoInteractions(uploads);
     }
 
     @Test
     void rejectsMissingMultipartFile() throws Exception {
-        mvc.perform(multipart(URL, TEAM_ID))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_FILE_FORMAT"));
+        mvc.perform(multipart(URL, TEAM_ID).param("settingsVersion", "1"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
     }
 
     @Test
     void rejectsZipWithoutExportAndRejectsAnOversizedJsonEntry() throws Exception {
         upload("missing.zip", archive("user.json", "[]"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_FILE_FORMAT"));
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_STRUCTURE"));
         upload("oversized.zip", archive("conversations.json", "[]" + " ".repeat(512)))
                 .andExpect(status().is(413))
-                .andExpect(jsonPath("$.code").value("FILE_TOO_LARGE"));
+                .andExpect(jsonPath("$.code").value("EXPANDED_SIZE_EXCEEDED"));
         assertThat(directory).isEmptyDirectory();
     }
 
@@ -218,7 +221,7 @@ class UploadFlowTest {
     void servletSizeLimitUsesTheSameErrorCode() {
         var response = new GlobalExceptionHandler().handleMaxUploadSizeExceeded(new MaxUploadSizeExceededException(512));
         assertThat(response.getStatusCode().value()).isEqualTo(413);
-        assertThat(response.getBody().getCode()).isEqualTo("FILE_TOO_LARGE");
+        assertThat(response.getBody().getCode()).isEqualTo("UPLOAD_TOO_LARGE");
     }
 
     @Test
@@ -229,11 +232,32 @@ class UploadFlowTest {
 
         settings.updateTarget(DAY, null, null, null);
         upload("conversations.json", bytes("[]"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("TARGET_NOT_SET"));
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
 
         verifyNoInteractions(uploads);
         assertThat(directory).isEmptyDirectory();
+    }
+
+    @Test
+    void rejectsStaleAndMissingSettingsVersions() throws Exception {
+        var file = multipartFile("conversations.json", bytes("[]"));
+        mvc.perform(multipart(URL, TEAM_ID).file(file).param("settingsVersion", "2"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+        mvc.perform(multipart(URL, TEAM_ID).file(file))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        verifyNoInteractions(uploads);
+    }
+
+    @Test
+    void rejectsUnsupportedFilesAndUnsafeArchivePaths() throws Exception {
+        upload("export.txt", bytes("[]"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_FILE_TYPE"));
+        upload("export.zip", archive("../conversations.json", "[]"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("UNSAFE_ARCHIVE"));
     }
 
     @Test
@@ -269,7 +293,7 @@ class UploadFlowTest {
     }
 
     private ResultActions upload(String name, byte[] body) throws Exception {
-        return mvc.perform(multipart(URL, TEAM_ID).file(multipartFile(name, body)));
+        return mvc.perform(multipart(URL, TEAM_ID).file(multipartFile(name, body)).param("settingsVersion", "1"));
     }
 
     private static MockMultipartFile multipartFile(String name, byte[] body) {

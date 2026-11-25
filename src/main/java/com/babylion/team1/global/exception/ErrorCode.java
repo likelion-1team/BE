@@ -53,6 +53,11 @@ public enum ErrorCode {
 
     // Upload
     INVALID_FILE_FORMAT(HttpStatus.BAD_REQUEST, "INVALID_FILE_FORMAT", "ChatGPT 내보내기 파일 형식을 확인해 주세요."),
+    UPLOAD_TOO_LARGE(HttpStatus.CONTENT_TOO_LARGE, "UPLOAD_TOO_LARGE", "업로드 파일이 허용 용량을 초과했습니다."),
+    EXPANDED_SIZE_EXCEEDED(HttpStatus.CONTENT_TOO_LARGE, "EXPANDED_SIZE_EXCEEDED", "압축 파일이 허용 한도를 초과했습니다."),
+    UNSUPPORTED_FILE_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_FILE_TYPE", "지원하지 않는 업로드 파일 형식입니다."),
+    UNSUPPORTED_STRUCTURE(HttpStatus.UNPROCESSABLE_CONTENT, "UNSUPPORTED_STRUCTURE", "ChatGPT 내보내기 파일 구조를 확인해 주세요."),
+    UNSAFE_ARCHIVE(HttpStatus.UNPROCESSABLE_CONTENT, "UNSAFE_ARCHIVE", "안전하지 않은 압축 파일입니다."),
     FILE_TOO_LARGE(HttpStatus.CONTENT_TOO_LARGE, "FILE_TOO_LARGE", "파일이 허용 용량을 초과했습니다."),
 
     // Analysis

@@ -67,32 +67,36 @@ class UploadFileExpiry {
             return;
         }
         Instant staleFileBefore = Instant.now().minus(RETENTION);
+        Instant uploadExpiryBefore = Instant.now().minus(Duration.ofMinutes(ServerPolicy.UPLOAD_RETENTION_MINUTES));
         LocalDateTime now = LocalDateTime.now();
         try (var files = Files.list(directory)) {
-            files.forEach(path -> expireFile(path, staleFileBefore, now));
+            files.forEach(path -> expireFile(path, staleFileBefore, uploadExpiryBefore, now));
         } catch (IOException e) {
             log.warn("임시 업로드 디렉터리를 읽을 수 없습니다.", e);
         }
     }
 
-    private void expireFile(Path path, Instant staleFileBefore, LocalDateTime now) {
+    private void expireFile(Path path, Instant staleFileBefore, Instant uploadExpiryBefore, LocalDateTime now) {
         String name = path.getFileName().toString();
         try {
-            if (!Files.isRegularFile(path) || Files.getLastModifiedTime(path).toInstant().isAfter(staleFileBefore)) {
+            if (!Files.isRegularFile(path)) {
                 return;
             }
+            Instant modifiedAt = Files.getLastModifiedTime(path).toInstant();
             if (STAGED_NAME.matcher(name).matches()) {
-                storage.delete(path);
+                if (!modifiedAt.isAfter(staleFileBefore)) {
+                    storage.delete(path);
+                }
                 return;
             }
             var match = STORED_NAME.matcher(name);
-            if (match.matches()) {
+            if (match.matches() && !modifiedAt.isAfter(uploadExpiryBefore)) {
                 Long uploadId = Long.valueOf(match.group(1));
                 transaction.executeWithoutResult(status -> {
                     // 분석 시작도 같은 행 잠금으로 상태를 확인한 뒤 파일을 사용한다.
                     boolean expired = uploadRepository.findByIdForUpdate(uploadId)
                             .map(upload -> upload.getStatus() == UploadStatus.DONE || isExpired(upload, path, now))
-                            .orElse(true);
+                            .orElse(!modifiedAt.isAfter(staleFileBefore));
                     if (expired) {
                         storage.deleteUpload(uploadId);
                     }
@@ -105,7 +109,7 @@ class UploadFileExpiry {
 
     static boolean isExpired(Upload upload, Path path, LocalDateTime now) {
         if (upload.getStatus() == UploadStatus.UPLOADED) {
-            return !upload.getUploadedAt().isAfter(now.minus(RETENTION));
+            return !upload.getUploadedAt().isAfter(now.minusMinutes(ServerPolicy.UPLOAD_RETENTION_MINUTES));
         }
         if (upload.getStatus() != UploadStatus.FAILED) {
             return false;

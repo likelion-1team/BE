@@ -56,10 +56,10 @@ class ChatGptExportReader {
     }
 
     List<ExportConversation> read(Path file, boolean zipped, LocalDate from, LocalDate to) {
-        return readFile(file, zipped, input -> readJson(input, from, to, false));
+        return readFile(file, zipped, input -> readJson(input, from, to, false)).candidates();
     }
 
-    List<ExportConversation> readCandidates(Path file, boolean zipped, LocalDate from, LocalDate to) {
+    CandidateExport readCandidates(Path file, boolean zipped, LocalDate from, LocalDate to) {
         return readFile(file, zipped, input -> readJson(input, from, to, true));
     }
 
@@ -99,6 +99,8 @@ class ChatGptExportReader {
             try (InputStream input = Files.newInputStream(file)) {
                 return read.apply(input);
             }
+        } catch (java.util.zip.ZipException e) {
+            throw new CustomException(ErrorCode.UNSAFE_ARCHIVE);
         } catch (JacksonException | IOException e) {
             // 파서 예외 메시지에 포함될 수 있는 대화 원문을 응답이나 로그에 남기지 않는다.
             throw invalidFormat();
@@ -107,6 +109,7 @@ class ChatGptExportReader {
 
     private <T> T readZip(Path file, Function<InputStream, T> read) throws IOException {
         try (ZipFile archive = new ZipFile(file.toFile())) {
+            validateArchive(archive);
             List<? extends ZipEntry> entries = archive.stream()
                     .filter(entry -> !entry.isDirectory())
                     .filter(entry -> entry.getName().equals("conversations.json")
@@ -118,7 +121,7 @@ class ChatGptExportReader {
             }
             ZipEntry entry = entries.get(0);
             if (entry.getSize() > maxExpandedBytes) {
-                throw new CustomException(ErrorCode.FILE_TOO_LARGE);
+                throw new CustomException(ErrorCode.EXPANDED_SIZE_EXCEEDED);
             }
             try (CheckedInputStream input = new CheckedInputStream(
                     new LimitedInputStream(archive.getInputStream(entry), maxExpandedBytes), new CRC32())) {
@@ -131,8 +134,32 @@ class ChatGptExportReader {
         }
     }
 
-    private List<ExportConversation> readJson(InputStream input, LocalDate from, LocalDate to, boolean hashContent) {
+    private void validateArchive(ZipFile archive) {
+        if (archive.size() > 1_000) {
+            throw new CustomException(ErrorCode.EXPANDED_SIZE_EXCEEDED);
+        }
+        long expanded = 0;
+        for (var entries = archive.entries(); entries.hasMoreElements();) {
+            var entry = entries.nextElement();
+            String name = entry.getName().replace('\\', '/');
+            String lower = name.toLowerCase(java.util.Locale.ROOT);
+            if (name.startsWith("/") || name.matches("^[A-Za-z]:.*")
+                    || java.util.Arrays.asList(name.split("/")).contains("..")
+                    || lower.endsWith(".zip") || lower.endsWith(".7z") || lower.endsWith(".rar")) {
+                throw new CustomException(ErrorCode.UNSAFE_ARCHIVE);
+            }
+            long size = entry.getSize();
+            long compressed = entry.getCompressedSize();
+            if (size > maxExpandedBytes - expanded || size > compressed * 100) {
+                throw new CustomException(ErrorCode.EXPANDED_SIZE_EXCEEDED);
+            }
+            expanded += size;
+        }
+    }
+
+    private CandidateExport readJson(InputStream input, LocalDate from, LocalDate to, boolean hashContent) {
         Map<String, ExportConversation> candidates = new LinkedHashMap<>();
+        int conversationCount = 0;
         try (JsonParser parser = jsonFactory.createParser(ObjectReadContext.empty(), input)) {
             if (parser.nextToken() != START_ARRAY) {
                 throw invalidFormat();
@@ -141,6 +168,7 @@ class ChatGptExportReader {
                 if (!parser.hasToken(START_OBJECT)) {
                     throw invalidFormat();
                 }
+                conversationCount++;
                 ExportConversation conversation = readConversation(parser, hashContent);
                 LocalDate date = conversation.startedAt().toLocalDate();
                 if (!date.isBefore(from) && !date.isAfter(to)) {
@@ -151,7 +179,7 @@ class ChatGptExportReader {
                 throw invalidFormat();
             }
         }
-        return List.copyOf(candidates.values());
+        return new CandidateExport(conversationCount, List.copyOf(candidates.values()));
     }
 
     private ExportConversation readConversation(JsonParser parser, boolean hashContent) {
@@ -209,7 +237,7 @@ class ChatGptExportReader {
         } catch (CustomException e) {
             turns = List.of();
         }
-        String validationCode = turns.isEmpty() ? "INVALID_FILE_FORMAT" : null;
+        String validationCode = turns.isEmpty() ? "UNSUPPORTED_STRUCTURE" : null;
         return new ExportConversation(externalId, title, startedAt, contentHash(turns), validationCode);
     }
 
@@ -255,8 +283,10 @@ class ChatGptExportReader {
     }
 
     private static CustomException invalidFormat() {
-        return new CustomException(ErrorCode.INVALID_FILE_FORMAT);
+        return new CustomException(ErrorCode.UNSUPPORTED_STRUCTURE);
     }
+
+    record CandidateExport(int conversationCount, List<ExportConversation> candidates) {}
 
     record ExportConversation(String externalId, String title, OffsetDateTime startedAt,
                               String contentHash, String validationCode) {
@@ -295,7 +325,7 @@ class ChatGptExportReader {
         private void count(int bytes) {
             remaining -= bytes;
             if (remaining < 0) {
-                throw new CustomException(ErrorCode.FILE_TOO_LARGE);
+                throw new CustomException(ErrorCode.EXPANDED_SIZE_EXCEEDED);
             }
         }
     }
