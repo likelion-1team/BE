@@ -502,8 +502,13 @@ class SharedFeedbackControllerIntegrationTest {
         designateGuide(teamId, newCaseId.longValue(), fixture.leader(), 3)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.sharedCaseId").value(newCaseId.longValue()));
+        mockMvc.perform(delete("/api/v1/teams/{teamId}/guides/{sharedCaseId}", teamId, originalCaseId.longValue())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.leader().getId())))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
         request(GUIDES, teamId, fixture.member())
                 .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].shareVersion").value(3))
                 .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(newCaseId.longValue()));
     }
 

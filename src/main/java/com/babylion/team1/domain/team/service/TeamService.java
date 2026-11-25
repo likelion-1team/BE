@@ -165,18 +165,14 @@ public class TeamService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public GuideAddResponse addGuide(Long teamId, Long sharedCaseId, Long userId, int expectedShareVersion) {
         requireMembershipManager(teamId, userId);
-        Long feedbackId = sharedCases.findFeedbackId(sharedCaseId, teamId)
-                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
-        // A31 uses the same lock. Read the case and guide after any earlier request commits.
-        Feedback feedback = feedbackRepository.findByIdForUpdate(feedbackId)
-                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        Feedback feedback = lockSharedCaseFeedback(teamId, sharedCaseId);
         SharedCase sharedCase = sharedCases.findByIdAndTeamId(sharedCaseId, teamId)
                 .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
         if (sharedCase.getStatus() == SharedCase.Status.REVOKED) {
             throw new CustomException(ErrorCode.SHARING_REVOKED);
         }
         if (sharedCase.getStatus() != SharedCase.Status.ACTIVE
-                || feedbackEvidenceRepository.hasDeletedOriginal(feedbackId)) {
+                || feedbackEvidenceRepository.hasDeletedOriginal(feedback.getId())) {
             throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         if (feedback.getShareVersion() != expectedShareVersion) {
@@ -188,20 +184,21 @@ public class TeamService {
         return new GuideAddResponse(sharedCaseId, true);
     }
 
-    @Transactional
-    public void removeGuide(Long feedbackId, Long userId) {
-        Feedback feedback = lockFeedback(feedbackId);
-        teamMemberRepository.findByTeamIdAndUserId(feedback.getTeam().getId(), userId)
-                .filter(TeamMember::isLeader)
-                .orElseThrow(() -> new CustomException(ErrorCode.LEADER_ONLY));
-        sharedCases.findByFeedbackIdAndStatus(feedbackId, SharedCase.Status.ACTIVE)
-                .ifPresent(active -> guides.deleteBySharedCaseId(active.getId()));
-        feedback.removeFromGuide();
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void removeGuide(Long teamId, Long sharedCaseId, Long userId) {
+        requireMembershipManager(teamId, userId);
+        lockSharedCaseFeedback(teamId, sharedCaseId);
+        sharedCases.findByIdAndTeamId(sharedCaseId, teamId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        guides.deleteBySharedCaseId(sharedCaseId);
     }
 
-    private Feedback lockFeedback(Long feedbackId) {
+    private Feedback lockSharedCaseFeedback(Long teamId, Long sharedCaseId) {
+        Long feedbackId = sharedCases.findFeedbackId(sharedCaseId, teamId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        // Sharing, guide assignment, and guide removal serialize on the same feedback row.
         return feedbackRepository.findByIdForUpdate(feedbackId)
-                .orElseThrow(() -> new CustomException(ErrorCode.FEEDBACK_NOT_FOUND));
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
     }
 
     private TeamMember requireMembershipManager(Long teamId, Long userId) {

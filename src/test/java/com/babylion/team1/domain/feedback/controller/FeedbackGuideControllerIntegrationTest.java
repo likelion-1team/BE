@@ -30,7 +30,6 @@ import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -62,8 +61,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Transactional
 class FeedbackGuideControllerIntegrationTest {
 
-    private static final String GUIDE = "/api/v1/feedbacks/{feedbackId}/guide";
-    private static final String ASSIGN_GUIDE = "/api/v1/teams/{teamId}/guides/{sharedCaseId}";
+    private static final String GUIDE = "/api/v1/teams/{teamId}/guides/{sharedCaseId}";
     private static final String GUIDES = "/api/v1/teams/{teamId}/guides";
     private static final String SHARED_CASES = "/api/v1/teams/{teamId}/shared-cases";
 
@@ -144,7 +142,7 @@ class FeedbackGuideControllerIntegrationTest {
         Fixture fixture = saveFixture();
 
         for (String body : List.of("{}", "{\"expectedShareVersion\":null}")) {
-            mockMvc.perform(put(ASSIGN_GUIDE, fixture.teamId(), fixture.sharedCaseId())
+            mockMvc.perform(put(GUIDE, fixture.teamId(), fixture.sharedCaseId())
                             .header(HttpHeaders.AUTHORIZATION, bearer(fixture.leaderId()))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(body))
@@ -193,48 +191,54 @@ class FeedbackGuideControllerIntegrationTest {
     }
 
     @Test
-    void exposesOnlyTheSharedCaseBasedGuidePutInOpenApi() throws Exception {
+    void exposesTheSharedCaseBasedGuidePutInOpenApi() throws Exception {
         mockMvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
                 .andExpect(jsonPath("$.paths['/api/v1/teams/{teamId}/guides/{sharedCaseId}'].put.responses['200']")
                         .exists())
                 .andExpect(jsonPath("$.paths['/api/v1/teams/{teamId}/guides/{sharedCaseId}'].put.requestBody.required")
                         .value(true))
-                .andExpect(jsonPath("$.components.schemas.GuideAddRequest.required[0]").value("expectedShareVersion"))
-                .andExpect(jsonPath("$.paths['/api/v1/feedbacks/{feedbackId}/guide'].put").doesNotExist());
+                .andExpect(jsonPath("$.components.schemas.GuideAddRequest.required[0]").value("expectedShareVersion"));
     }
 
     @Test
-    void removeGuidePreservesSharedFeedbackAndAllowsReassignment() throws Exception {
+    void removeGuideKeepsTheSharedSnapshotAndAllowsReassignment() throws Exception {
         Fixture fixture = saveFixture();
         assign(fixture).andExpect(status().isOk());
         entityManager.flush();
         entityManager.clear();
-        Feedback before = feedbackRepository.findById(fixture.feedbackId()).orElseThrow();
-        LocalDateTime sharedAt = before.getSharedAt();
-        String title = before.getTitle();
 
-        remove(fixture.feedbackId(), fixture.leaderId())
+        SharedCase before = entityManager.find(SharedCase.class, fixture.sharedCaseId());
+        Feedback feedbackBefore = feedbackRepository.findById(fixture.feedbackId()).orElseThrow();
+
+        remove(fixture.teamId(), fixture.sharedCaseId(), fixture.leaderId())
                 .andExpect(status().isNoContent())
                 .andExpect(content().string(""));
         entityManager.flush();
         entityManager.clear();
 
-        Feedback after = feedbackRepository.findById(fixture.feedbackId()).orElseThrow();
-        assertThat(after.getIsShared()).isTrue();
-        assertThat(after.getSharedAt()).isEqualTo(sharedAt);
-        assertThat(after.getTitle()).isEqualTo(title);
-        assertThat(after.getShareVersion()).isEqualTo(1);
+        SharedCase after = entityManager.find(SharedCase.class, fixture.sharedCaseId());
+        assertThat(after.getStatus()).isEqualTo(SharedCase.Status.ACTIVE);
+        assertThat(after.getContent()).isEqualTo(before.getContent());
+        assertThat(after.getSharedAt()).isEqualTo(before.getSharedAt());
+        Feedback feedbackAfter = feedbackRepository.findById(fixture.feedbackId()).orElseThrow();
+        assertThat(feedbackAfter.getIsShared()).isTrue();
+        assertThat(feedbackAfter.getSharedAt()).isEqualTo(feedbackBefore.getSharedAt());
+        assertThat(feedbackAfter.getShareVersion()).isEqualTo(1);
         assertThat(guideRepository.findBySharedCaseId(fixture.sharedCaseId())).isEmpty();
-        remove(fixture.feedbackId(), fixture.leaderId())
+
+        remove(fixture.teamId(), fixture.sharedCaseId(), fixture.leaderId())
                 .andExpect(status().isNoContent())
                 .andExpect(content().string(""));
 
         mockMvc.perform(get(GUIDES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.ownerId())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.items").isEmpty());
+                .andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(0));
         mockMvc.perform(get(SHARED_CASES, fixture.teamId()).header(HttpHeaders.AUTHORIZATION, bearer(fixture.leaderId())))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
                 .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(fixture.sharedCaseId()))
+                .andExpect(jsonPath("$.data.items[0].shareVersion").value(1))
                 .andExpect(jsonPath("$.data.items[0].isGuide").value(false));
 
         assign(fixture).andExpect(status().isOk())
@@ -256,43 +260,98 @@ class FeedbackGuideControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.shared").value(false));
 
-        remove(fixture.feedbackId(), fixture.leaderId())
+        remove(fixture.teamId(), fixture.sharedCaseId(), fixture.leaderId())
                 .andExpect(status().isNoContent())
                 .andExpect(content().string(""));
         entityManager.flush();
         entityManager.clear();
+
         assertRevoked(fixture);
+        assertThat(entityManager.find(SharedCase.class, fixture.sharedCaseId()).getStatus())
+                .isEqualTo(SharedCase.Status.REVOKED);
     }
 
     @Test
-    void removeGuideRequiresFeedbackAndItsTeamLeader() throws Exception {
+    void removeGuideRequiresTheCasesTeamLeader() throws Exception {
         Fixture fixture = saveFixture();
         Fixture other = saveFixture();
         assign(fixture).andExpect(status().isOk());
+        assign(other).andExpect(status().isOk());
 
-        remove(fixture.feedbackId(), fixture.ownerId())
+        remove(fixture.teamId(), fixture.sharedCaseId(), fixture.ownerId())
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
-        remove(fixture.feedbackId(), other.leaderId())
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
-        remove(Long.MAX_VALUE, fixture.leaderId())
+                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
+        remove(fixture.teamId(), fixture.sharedCaseId(), other.leaderId())
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("FEEDBACK_NOT_FOUND"));
-        mockMvc.perform(delete(GUIDE, fixture.feedbackId()))
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        remove(fixture.teamId(), other.sharedCaseId(), fixture.leaderId())
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        remove(fixture.teamId(), Long.MAX_VALUE, fixture.leaderId())
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        mockMvc.perform(delete(GUIDE, fixture.teamId(), fixture.sharedCaseId()))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
 
         assertThat(guideRepository.findBySharedCaseId(fixture.sharedCaseId())).isPresent();
+        assertThat(guideRepository.findBySharedCaseId(other.sharedCaseId())).isPresent();
     }
 
     @Test
     void removeGuideExposesNoContentInOpenApi() throws Exception {
+        String endpoint = "$.paths['" + GUIDE + "'].delete";
         mockMvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
-                .andExpect(jsonPath("$.paths['/api/v1/feedbacks/{feedbackId}/guide'].delete.responses['204']").exists())
-                .andExpect(jsonPath("$.paths['/api/v1/feedbacks/{feedbackId}/guide'].delete.responses['204'].content")
-                        .doesNotExist())
-                .andExpect(jsonPath("$.paths['/api/v1/feedbacks/{feedbackId}/guide'].delete.requestBody").doesNotExist());
+                .andExpect(jsonPath(endpoint + ".responses['204']").exists())
+                .andExpect(jsonPath(endpoint + ".responses['204'].content").doesNotExist())
+                .andExpect(jsonPath(endpoint + ".requestBody").doesNotExist())
+                .andExpect(jsonPath("$.paths['/api/v1/feedbacks/{feedbackId}/guide']").doesNotExist());
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void removalWaitsForAssignmentAndDeletesTheCommittedGuide() throws Exception {
+        Fixture fixture = transactions.execute(ignored -> saveFixture());
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch assignmentFlushed = new CountDownLatch(1);
+        CountDownLatch commitAssignment = new CountDownLatch(1);
+        try {
+            Future<?> assignment = executor.submit(() -> transactions.executeWithoutResult(ignored -> {
+                try {
+                    assign(fixture).andExpect(status().isOk());
+                } catch (Exception exception) {
+                    throw new IllegalStateException("Guide request failed", exception);
+                }
+                entityManager.flush();
+                assignmentFlushed.countDown();
+                await(commitAssignment);
+            }));
+            await(assignmentFlushed);
+
+            CountDownLatch removalStarted = new CountDownLatch(1);
+            Future<?> removal = executor.submit(() -> {
+                removalStarted.countDown();
+                return remove(fixture.teamId(), fixture.sharedCaseId(), fixture.leaderId())
+                        .andExpect(status().isNoContent())
+                        .andExpect(content().string(""))
+                        .andReturn();
+            });
+            await(removalStarted);
+            assertWaits(removal);
+            commitAssignment.countDown();
+
+            assignment.get(10, TimeUnit.SECONDS);
+            removal.get(10, TimeUnit.SECONDS);
+            assertThat(guideRepository.findBySharedCaseId(fixture.sharedCaseId())).isEmpty();
+            mockMvc.perform(get(SHARED_CASES, fixture.teamId())
+                            .header(HttpHeaders.AUTHORIZATION, bearer(fixture.leaderId())))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(fixture.sharedCaseId()))
+                    .andExpect(jsonPath("$.data.items[0].isGuide").value(false));
+        } finally {
+            commitAssignment.countDown();
+            closeFixture(executor, fixture);
+        }
     }
 
     @Test
@@ -444,15 +503,16 @@ class FeedbackGuideControllerIntegrationTest {
     }
 
     private MockHttpServletRequestBuilder assignment(Long teamId, Long sharedCaseId, int expectedShareVersion) {
-        return put(ASSIGN_GUIDE, teamId, sharedCaseId)
+        return put(GUIDE, teamId, sharedCaseId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                         {"expectedShareVersion":%d}
                         """.formatted(expectedShareVersion));
     }
 
-    private ResultActions remove(Long feedbackId, Long userId) throws Exception {
-        return mockMvc.perform(delete(GUIDE, feedbackId).header(HttpHeaders.AUTHORIZATION, bearer(userId)));
+    private ResultActions remove(Long teamId, Long sharedCaseId, Long userId) throws Exception {
+        return mockMvc.perform(delete(GUIDE, teamId, sharedCaseId)
+                .header(HttpHeaders.AUTHORIZATION, bearer(userId)));
     }
 
     private void assertRevoked(Fixture fixture) throws Exception {
