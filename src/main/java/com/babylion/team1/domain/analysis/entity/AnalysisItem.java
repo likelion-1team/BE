@@ -149,6 +149,15 @@ public class AnalysisItem {
         this.claimExpiresAt = claimExpiresAt;
     }
 
+    public void requeue() {
+        status = AnalysisItemStatus.QUEUED;
+        claimExpiresAt = null;
+    }
+
+    public boolean isRunningAttempt(int attempt) {
+        return status == AnalysisItemStatus.RUNNING && attemptCount == attempt;
+    }
+
     public void succeed(int tokens, String model, boolean current) {
         status = AnalysisItemStatus.SUCCEEDED;
         claimExpiresAt = null;
