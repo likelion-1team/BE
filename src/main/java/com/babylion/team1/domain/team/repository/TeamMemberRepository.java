@@ -3,7 +3,6 @@ package com.babylion.team1.domain.team.repository;
 import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
 import com.babylion.team1.domain.team.entity.TeamMember;
-import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -48,7 +47,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 			and exists (select 1 from Upload u where u = c.upload and u.status = DONE)
 			""";
 
-	@Query("""
+	@Query(value = """
 		select new com.babylion.team1.domain.team.dto.response.TeamMemberListResponse(
 			rosterUser.id, rosterUser.name, rosterUser.email, membership.role,
 			case when exists (select 1 from AnalysisItem item where
@@ -61,8 +60,10 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
 		left join TeamSettings settings on settings.team = membership.team and settings.current = true
 		where membership.team.id = :teamId
 		order by membership.joinedAt, membership.id
+		""", countQuery = """
+		select count(membership.id) from TeamMember membership where membership.team.id = :teamId
 		""")
-	List<TeamMemberListResponse> findTeamMembersWithSubmission(@Param("teamId") Long teamId);
+	Page<TeamMemberListResponse> findTeamMembersWithSubmission(@Param("teamId") Long teamId, Pageable pageable);
 
 	@Query("""
 		select new com.babylion.team1.domain.team.repository.TeamMemberRepository$SubmissionSummary(
