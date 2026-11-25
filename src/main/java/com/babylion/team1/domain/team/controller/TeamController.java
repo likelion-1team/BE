@@ -6,13 +6,16 @@ import com.babylion.team1.domain.feedback.dto.response.MyFeedbackListResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
-import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
+import com.babylion.team1.domain.team.dto.response.MyTeamsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
 import com.babylion.team1.domain.team.service.TeamService;
+import com.babylion.team1.global.exception.CustomException;
+import com.babylion.team1.global.exception.ErrorCode;
 import com.babylion.team1.global.response.ApiResponse;
+import com.babylion.team1.global.response.FieldErrorResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
@@ -21,6 +24,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -42,14 +46,21 @@ public class TeamController {
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<TeamCreateResponse> createTeam(
             @AuthenticationPrincipal Long userId,
-            @Valid @RequestBody TeamCreateRequest request) {
+            @Valid @RequestBody TeamCreateRequest request,
+            BindingResult validation) {
+        if (validation.hasErrors()) {
+            throw CustomException.withErrors(ErrorCode.VALIDATION_FAILED, FieldErrorResponse.listFrom(validation));
+        }
         return ApiResponse.success("S201", "팀 생성 성공", teamService.createTeam(userId, request));
     }
 
     @Operation(summary = "내 팀 목록 조회")
     @GetMapping
-    public ApiResponse<List<MyTeamResponse>> getMyTeams(@AuthenticationPrincipal Long userId) {
-        return ApiResponse.success("S200", "조회 성공", teamService.getMyTeams(userId));
+    public ApiResponse<MyTeamsResponse> getMyTeams(
+            @AuthenticationPrincipal Long userId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getMyTeams(userId, page, size));
     }
 
     @Operation(summary = "팀원 추가")

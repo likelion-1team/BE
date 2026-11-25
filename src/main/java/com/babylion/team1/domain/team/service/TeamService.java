@@ -16,7 +16,7 @@ import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Cont
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository.MyFeedbackRow;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
-import com.babylion.team1.domain.team.dto.response.MyTeamResponse;
+import com.babylion.team1.domain.team.dto.response.MyTeamsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
@@ -52,6 +52,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class TeamService {
 
     private static final int FEEDBACK_DAYS_PER_PAGE = 20;
+    private static final int MAX_TEAM_PAGE_SIZE = 100;
     private static final Comparator<MyFeedbackRow> LATEST_FEEDBACK_FIRST =
             Comparator.comparing(MyFeedbackRow::createdAt).thenComparing(MyFeedbackRow::feedbackId).reversed();
 
@@ -73,15 +74,19 @@ public class TeamService {
                 .description(request.description())
                 .createdBy(creator)
                 .build());
-        teamMemberRepository.save(TeamMember.leader(team, creator));
+        TeamMember leader = teamMemberRepository.save(TeamMember.leader(team, creator));
         teamSettingsRepository.save(TeamSettings.createDefault(team));
         teamGoalRepository.save(TeamGoal.createDefault(team));
-        return new TeamCreateResponse(team.getId());
+        return new TeamCreateResponse(team.getId(), team.getName(), team.getDescription(), leader.getRole());
     }
 
     @Transactional(readOnly = true)
-    public List<MyTeamResponse> getMyTeams(Long userId) {
-        return teamMemberRepository.findMyTeams(userId);
+    public MyTeamsResponse getMyTeams(Long userId, int page, int size) {
+        if (page < 1 || size < 1 || size > MAX_TEAM_PAGE_SIZE || (long) (page - 1) * size > Integer.MAX_VALUE) {
+            throw new CustomException(ErrorCode.INVALID_REQUEST);
+        }
+        var teams = teamMemberRepository.findMyTeams(userId, PageRequest.of(page - 1, size));
+        return new MyTeamsResponse(teams.getContent(), page, size, teams.getTotalElements());
     }
 
     @Transactional
