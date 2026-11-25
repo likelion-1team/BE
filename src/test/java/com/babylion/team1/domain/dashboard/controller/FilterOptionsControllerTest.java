@@ -107,20 +107,22 @@ class FilterOptionsControllerTest {
     }
 
     @Test
-    @DisplayName("TEAM: 주 단위만 고를 수 있고, 대상 기간에 걸친 완료된 주만 응답한다(이번 주 제외)")
+    @DisplayName("TEAM: 주 단위만 고를 수 있고, 대상 기간에 걸친 완료된 주만 응답한다(이번 주 제외). 팀원도 조회할 수 있다")
     void teamOptions() throws Exception {
-        perform(leader, "?scope=TEAM")
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.scope").value("TEAM"))
-                .andExpect(jsonPath("$.data.settingsVersions", contains(1, 2)))
-                .andExpect(jsonPath("$.data.allowedUnits", contains("WEEK")))
-                .andExpect(jsonPath("$.data.availableWeeks[*].weekStart", contains(
-                        thisMonday.minusWeeks(3).toString(),
-                        thisMonday.minusWeeks(2).toString(),
-                        thisMonday.minusWeeks(1).toString())))
-                .andExpect(jsonPath("$.data.availableWeeks[2].weekEnd").value(thisMonday.minusDays(1).toString()))
-                .andExpect(jsonPath("$.data.allowedModels", hasSize(0)))
-                .andExpect(jsonPath("$.data.comparisonAvailable").value(false));
+        for (User viewer : new User[] {member, leader}) {
+            perform(viewer, "?scope=TEAM")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.scope").value("TEAM"))
+                    .andExpect(jsonPath("$.data.settingsVersions", contains(1, 2)))
+                    .andExpect(jsonPath("$.data.allowedUnits", contains("WEEK")))
+                    .andExpect(jsonPath("$.data.availableWeeks[*].weekStart", contains(
+                            thisMonday.minusWeeks(3).toString(),
+                            thisMonday.minusWeeks(2).toString(),
+                            thisMonday.minusWeeks(1).toString())))
+                    .andExpect(jsonPath("$.data.availableWeeks[2].weekEnd").value(thisMonday.minusDays(1).toString()))
+                    .andExpect(jsonPath("$.data.allowedModels", hasSize(0)))
+                    .andExpect(jsonPath("$.data.comparisonAvailable").value(false));
+        }
     }
 
     @Test
@@ -139,26 +141,27 @@ class FilterOptionsControllerTest {
     }
 
     @Test
-    @DisplayName("팀원이 TEAM을 요청하면 403, 다른 팀이거나 없는 팀이면 404다")
+    @DisplayName("다른 팀이거나 없는 팀이면 404다")
     void accessDenied() throws Exception {
-        perform(member, "?scope=TEAM")
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
-        perform(outsider, "?scope=ME")
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
-        mockMvc.perform(fixture.get(leader, url(Long.MAX_VALUE) + "?scope=ME"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        for (String query : new String[] {"?scope=ME", "?scope=TEAM"}) {
+            perform(outsider, query)
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+            mockMvc.perform(fixture.get(member, url(Long.MAX_VALUE) + query))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        }
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"", "?scope=", "?scope=ALL", "?scope=ME&models=gpt-4o", "?scope=TEAM&weekStart=2026-11-02"})
     @DisplayName("scope가 없거나 잘못됐거나 지원하지 않는 파라미터가 있으면 422 VALIDATION_FAILED다")
     void invalidRequest(String query) throws Exception {
-        perform(leader, query)
-                .andExpect(status().is(422))
-                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        for (User viewer : new User[] {member, leader}) {
+            perform(viewer, query)
+                    .andExpect(status().is(422))
+                    .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        }
     }
 
     @Test

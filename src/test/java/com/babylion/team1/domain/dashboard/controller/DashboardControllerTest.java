@@ -1,5 +1,6 @@
 package com.babylion.team1.domain.dashboard.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.endsWith;
@@ -35,6 +36,7 @@ import java.time.ZoneId;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.hamcrest.Matcher;
 import org.junit.jupiter.api.BeforeEach;
@@ -226,44 +228,50 @@ class DashboardControllerTest {
     }
 
     @Test
-    @DisplayName("TEAM: 기여자 4명이면 200으로 응답하되 모든 값·건수와 coverage를 숨기고, 5명이면 제공한다")
+    @DisplayName("TEAM: 기여자 4명이면 200으로 응답하되 모든 값·건수와 coverage를 숨기고, 5명이면 제공한다(팀장·팀원 동일)")
     void teamSuppressionBoundary() throws Exception {
         for (User user : members.subList(0, 4)) {
             saveItems(6, user, AnalysisOutcome.SUCCESS, AnalysisReworkType.NONE);
         }
-        perform(leader, TEAM)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.scope").value("TEAM"))
-                .andExpect(jsonPath("$.data.coverage").value(nullValue()))
-                .andExpect(jsonPath("$.data.metrics[*].status", contains("SUPPRESSED", "SUPPRESSED", "SUPPRESSED",
-                        "SUPPRESSED", "SUPPRESSED")))
-                .andExpect(jsonPath("$.data.metrics[*].value", everyItem(nullValue())))
-                .andExpect(jsonPath("$.data.metrics[*].numerator", everyItem(nullValue())))
-                .andExpect(jsonPath("$.data.metrics[*].denominator", everyItem(nullValue())))
-                .andExpect(jsonPath("$.data.metrics[*].sampleSize", everyItem(nullValue())))
-                .andExpect(jsonPath("$.data.metrics[*].missingCount", everyItem(nullValue())));
+        for (User viewer : List.of(leader, member)) {
+            perform(viewer, TEAM)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.scope").value("TEAM"))
+                    .andExpect(jsonPath("$.data.coverage").value(nullValue()))
+                    .andExpect(jsonPath("$.data.metrics[*].status", contains("SUPPRESSED", "SUPPRESSED", "SUPPRESSED",
+                            "SUPPRESSED", "SUPPRESSED")))
+                    .andExpect(jsonPath("$.data.metrics[*].value", everyItem(nullValue())))
+                    .andExpect(jsonPath("$.data.metrics[*].numerator", everyItem(nullValue())))
+                    .andExpect(jsonPath("$.data.metrics[*].denominator", everyItem(nullValue())))
+                    .andExpect(jsonPath("$.data.metrics[*].sampleSize", everyItem(nullValue())))
+                    .andExpect(jsonPath("$.data.metrics[*].missingCount", everyItem(nullValue())));
+        }
 
         saveItems(1, members.get(4), AnalysisOutcome.FAILURE, AnalysisReworkType.NONE);
-        perform(leader, TEAM)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.metrics[*].status", everyItem(is("AVAILABLE"))))
-                .andExpect(jsonPath("$.data.metrics[0].value").value(0.96))
-                .andExpect(jsonPath("$.data.coverage.inScopeCount").value(25));
+        for (User viewer : List.of(leader, member)) {
+            perform(viewer, TEAM)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.metrics[*].status", everyItem(is("AVAILABLE"))))
+                    .andExpect(jsonPath("$.data.metrics[0].value").value(0.96))
+                    .andExpect(jsonPath("$.data.coverage.inScopeCount").value(25));
+        }
     }
 
     @Test
-    @DisplayName("TEAM: 지표 일부만 숨겨도 coverage는 null이다")
+    @DisplayName("TEAM: 지표 일부만 숨겨도 coverage는 null이다(팀장·팀원 동일)")
     void coverageIsNullWhenAnyMetricIsSuppressed() throws Exception {
         for (User user : members.subList(0, 4)) {
             saveItems(6, user, AnalysisOutcome.SUCCESS, AnalysisReworkType.NONE);
         }
         saveItems(1, members.get(4), AnalysisOutcome.SUCCESS, null);
 
-        perform(leader, TEAM)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.metrics[*].status", contains("AVAILABLE", "AVAILABLE", "SUPPRESSED",
-                        "SUPPRESSED", "AVAILABLE")))
-                .andExpect(jsonPath("$.data.coverage").value(nullValue()));
+        for (User viewer : List.of(leader, member)) {
+            perform(viewer, TEAM)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.metrics[*].status", contains("AVAILABLE", "AVAILABLE", "SUPPRESSED",
+                            "SUPPRESSED", "AVAILABLE")))
+                    .andExpect(jsonPath("$.data.coverage").value(nullValue()));
+        }
     }
 
     @Test
@@ -321,12 +329,21 @@ class DashboardControllerTest {
     }
 
     @Test
-    @DisplayName("팀원이 TEAM을 요청하면 403 ROLE_FORBIDDEN, 팀장은 ME도 조회할 수 있다")
+    @DisplayName("팀장과 팀원 모두 ME와 TEAM을 조회할 수 있고, 같은 조건이면 팀 지표가 같다")
     void roles() throws Exception {
+        for (User user : members) {
+            saveItems(4, user, AnalysisOutcome.SUCCESS, AnalysisReworkType.NONE);
+        }
+        saveItems(5, leader, AnalysisOutcome.FAILURE, AnalysisReworkType.ERROR_CORRECTION);
+
+        for (User viewer : List.of(leader, member)) {
+            perform(viewer, ME).andExpect(status().isOk()).andExpect(jsonPath("$.data.scope").value("ME"));
+        }
         perform(member, TEAM)
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
-        perform(leader, ME).andExpect(status().isOk()).andExpect(jsonPath("$.data.scope").value("ME"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.scope").value("TEAM"))
+                .andExpect(jsonPath("$.data.metrics[0].value").value(0.8));
+        assertThat(teamData(member)).isEqualTo(teamData(leader));
     }
 
     @Test
@@ -337,9 +354,11 @@ class DashboardControllerTest {
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         }
-        mockMvc.perform(fixture.get(leader, "/api/v1/teams/" + Long.MAX_VALUE + "/dashboard/kpis" + ME))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        for (String query : List.of(ME, TEAM)) {
+            mockMvc.perform(fixture.get(member, "/api/v1/teams/" + Long.MAX_VALUE + "/dashboard/kpis" + query))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        }
     }
 
     @ParameterizedTest
@@ -419,6 +438,14 @@ class DashboardControllerTest {
             fixture.save(fixture.item(settings, user, MONDAY).confirmedOutcome(outcome)
                     .confirmedReworkType(reworkType));
         }
+    }
+
+    /** 조회 시각(asOf)을 뺀 TEAM 응답 */
+    private Map<String, Object> teamData(User user) throws Exception {
+        String body = perform(user, TEAM).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        Map<String, Object> data = JsonPath.read(body, "$.data");
+        data.remove("asOf");
+        return data;
     }
 
     private String cohortIdOf(User user, String query) throws Exception {

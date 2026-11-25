@@ -15,7 +15,6 @@ import com.babylion.team1.domain.dashboard.dto.response.MetricResponse;
 import com.babylion.team1.domain.dashboard.dto.response.TrendPoint;
 import com.babylion.team1.domain.dashboard.dto.response.TrendResponse;
 import com.babylion.team1.domain.dashboard.repository.DashboardCohortRepository;
-import com.babylion.team1.domain.team.entity.TeamMember;
 import com.babylion.team1.domain.team.entity.TeamSettings;
 import com.babylion.team1.domain.team.repository.TeamGoalRepository;
 import com.babylion.team1.domain.team.repository.TeamMemberRepository;
@@ -39,8 +38,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 대시보드 v4 API(필터 옵션, KPI 카드, 추이). 분석 항목(analysis_items)과 직원이 확인한 값으로 계산한다.
- * 공통 에러: 다른 팀이면 404 RESOURCE_NOT_FOUND, 팀원이 TEAM을 요청하면 403 ROLE_FORBIDDEN,
- * 값이 잘못되면 422 VALIDATION_FAILED. 표본 부족이나 숨김은 에러가 아니라 지표의 status로 알린다.
+ * 팀장과 팀원 모두 ME와 TEAM을 조회할 수 있고, 같은 조건이면 팀 지표도 같다.
+ * 공통 에러: 다른 팀이거나 없는 팀이면 404 RESOURCE_NOT_FOUND, 값이 잘못되면 422 VALIDATION_FAILED.
+ * 표본 부족이나 숨김은 에러가 아니라 지표의 status로 알린다.
  * parameterNames는 요청에 실제로 들어온 쿼리 파라미터 이름이며, 지원하지 않는 파라미터를 거부하는 데 쓴다.
  */
 @Service
@@ -125,15 +125,11 @@ public class DashboardMetricService {
                 .orElseThrow();
     }
 
-    /** 팀 소속 → scope 값 → 역할 순서로 확인한다. 다른 팀 사용자에게는 팀의 존재 여부를 알리지 않는다. */
+    /** 팀 소속 → scope 값 순서로 확인한다. 다른 팀 사용자에게는 팀의 존재 여부를 알리지 않는다. */
     private DashboardScope authorize(Long teamId, Long userId, String scopeValue) {
-        TeamMember member = teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
+        teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
                 .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
-        DashboardScope scope = DashboardParameters.scope(scopeValue);
-        if (scope == DashboardScope.TEAM && !member.isLeader()) {
-            throw new CustomException(ErrorCode.ROLE_FORBIDDEN);
-        }
-        return scope;
+        return DashboardParameters.scope(scopeValue);
     }
 
     private DatePeriod period(DashboardScope scope, String from, String to, String weekStart) {

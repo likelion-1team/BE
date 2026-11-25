@@ -151,7 +151,7 @@ class TeamControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.items[0].myRole").value("MEMBER"))
                 .andExpect(jsonPath("$.data.items[0].memberCount").value(3))
                 .andExpect(jsonPath("$.data.items[0].capabilities").value(is(Map.of(
-                        "canViewOwnData", true, "canViewTeamMetrics", false, "canEditSettings", false,
+                        "canViewOwnData", true, "canViewTeamMetrics", true, "canEditSettings", false,
                         "canEditGoals", false, "canManageMembers", false, "canManageSharedCases", false))));
 
         mockMvc.perform(get(PATH).param("page", "2").param("size", "1")

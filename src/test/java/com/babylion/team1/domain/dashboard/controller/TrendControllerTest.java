@@ -139,7 +139,7 @@ class TrendControllerTest {
 
     @ParameterizedTest
     @EnumSource(MetricCode.class)
-    @DisplayName("같은 조건이면 KPI와 추이의 cohortId와 지표가 같다 (ME·TEAM)")
+    @DisplayName("같은 조건이면 KPI와 추이의 cohortId와 지표가 같다 (ME, 팀장·팀원의 TEAM)")
     void matchesKpi(MetricCode code) throws Exception {
         for (User user : members) {
             saveItems(4, user, MONDAY, AnalysisOutcome.SUCCESS);
@@ -148,41 +148,49 @@ class TrendControllerTest {
         saveItems(1, leader, MONDAY, null);
 
         assertMatchesKpi(member, "?scope=ME&from=2026-11-02&to=2026-11-08&settingsVersion=1", code);
-        assertMatchesKpi(leader, "?scope=TEAM&weekStart=2026-11-02&settingsVersion=1", code);
+        for (User viewer : List.of(leader, member)) {
+            assertMatchesKpi(viewer, "?scope=TEAM&weekStart=2026-11-02&settingsVersion=1", code);
+        }
     }
 
     @Test
-    @DisplayName("TEAM: 고른 주 하나만 응답하고, 기여자가 부족하면 값과 건수를 숨긴다")
+    @DisplayName("TEAM: 고른 주 하나만 응답하고, 기여자가 부족하면 값과 건수를 숨긴다(팀장·팀원 동일)")
     void teamWeek() throws Exception {
         for (User user : members.subList(0, 4)) {
             saveItems(6, user, MONDAY, AnalysisOutcome.SUCCESS);
             saveItems(6, user, MONDAY.plusWeeks(1), AnalysisOutcome.SUCCESS);
         }
-        perform(leader, TEAM)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.points", hasSize(1)))
-                .andExpect(jsonPath("$.data.points[0].periodStart").value("2026-11-02"))
-                .andExpect(jsonPath("$.data.points[0].metric.status").value("SUPPRESSED"))
-                .andExpect(jsonPath("$.data.points[0].metric.value").value(nullValue()))
-                .andExpect(jsonPath("$.data.points[0].metric.numerator").value(nullValue()))
-                .andExpect(jsonPath("$.data.points[0].metric.denominator").value(nullValue()))
-                .andExpect(jsonPath("$.data.points[0].metric.sampleSize").value(nullValue()))
-                .andExpect(jsonPath("$.data.points[0].metric.missingCount").value(nullValue()));
+        for (User viewer : List.of(leader, member)) {
+            perform(viewer, TEAM)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.points", hasSize(1)))
+                    .andExpect(jsonPath("$.data.points[0].periodStart").value("2026-11-02"))
+                    .andExpect(jsonPath("$.data.points[0].metric.status").value("SUPPRESSED"))
+                    .andExpect(jsonPath("$.data.points[0].metric.value").value(nullValue()))
+                    .andExpect(jsonPath("$.data.points[0].metric.numerator").value(nullValue()))
+                    .andExpect(jsonPath("$.data.points[0].metric.denominator").value(nullValue()))
+                    .andExpect(jsonPath("$.data.points[0].metric.sampleSize").value(nullValue()))
+                    .andExpect(jsonPath("$.data.points[0].metric.missingCount").value(nullValue()));
+        }
 
         saveItems(1, members.get(4), MONDAY, AnalysisOutcome.FAILURE);
-        perform(leader, TEAM)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.points", hasSize(1)))
-                .andExpect(jsonPath("$.data.points[0].metric.value").value(0.96));
+        for (User viewer : List.of(leader, member)) {
+            perform(viewer, TEAM)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.points", hasSize(1)))
+                    .andExpect(jsonPath("$.data.points[0].metric.value").value(0.96));
+        }
+        assertThat((Object) JsonPath.read(body(perform(member, TEAM)), "$.data.points"))
+                .isEqualTo(JsonPath.read(body(perform(leader, TEAM)), "$.data.points"));
     }
 
     @Test
-    @DisplayName("팀원이 TEAM을 요청하면 403 ROLE_FORBIDDEN, 다른 팀이면 404 RESOURCE_NOT_FOUND다")
-    void roles() throws Exception {
-        perform(member, TEAM)
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
+    @DisplayName("다른 팀이거나 없는 팀이면 404 RESOURCE_NOT_FOUND다")
+    void otherTeam() throws Exception {
         perform(outsider, TEAM)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        mockMvc.perform(fixture.get(member, "/api/v1/teams/" + Long.MAX_VALUE + "/dashboard/trends" + TEAM))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
