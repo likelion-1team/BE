@@ -418,6 +418,9 @@ class SharedFeedbackControllerIntegrationTest {
         request(GUIDES, teamId, fixture.member(), "size", "1")
                 .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(visibleCase.getId()))
                 .andExpect(jsonPath("$.data.total").value(1));
+        designateGuide(teamId, deletedCase.getId(), fixture.leader(), 1)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
 
     @Test
@@ -429,14 +432,9 @@ class SharedFeedbackControllerIntegrationTest {
         entityManager.clear();
 
         addPrivateEvidence(entityManager.find(Feedback.class, feedback.getId()));
-        var previewResult = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                        .post("/api/v1/feedbacks/{feedbackId}/share-preview", feedback.getId())
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.member().getId())))
-                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
-        Number previewId = JsonPath.read(previewResult, "$.data.previewId");
         String approval = """
                 {"shared":true,"expectedShareVersion":0,"previewId":%d,"previewVersion":1}
-                """.formatted(previewId.longValue());
+                """.formatted(createSharePreview(feedback.getId(), fixture.member()));
         share(feedback.getId(), fixture.member(), approval.replace("expectedShareVersion\":0", "expectedShareVersion\":9"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
@@ -445,9 +443,14 @@ class SharedFeedbackControllerIntegrationTest {
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.message").value("공유 상태 변경 성공"))
                 .andExpect(jsonPath("$.data.shared").value(true));
-        mockMvc.perform(put("/api/v1/feedbacks/{feedbackId}/guide", feedback.getId())
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(fixture.leader().getId())))
-                .andExpect(status().isOk());
+        String listed = request(SHARED_CASES, teamId, fixture.leader())
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        Number originalCaseId = JsonPath.read(listed, "$.data.items[0].sharedCaseId");
+        Number initialShareVersion = JsonPath.read(listed, "$.data.items[0].shareVersion");
+        designateGuide(teamId, originalCaseId.longValue(), fixture.leader(), initialShareVersion.intValue())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.sharedCaseId").value(originalCaseId.longValue()))
+                .andExpect(jsonPath("$.data.isGuide").value(true));
         assertThat(jdbc.queryForObject("""
                 select count(*) from guides g join shared_cases c on c.id = g.shared_case_id
                 where c.feedback_id = ? and c.status = 'ACTIVE'
@@ -480,6 +483,28 @@ class SharedFeedbackControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.total").value(0));
         request(GUIDES, teamId, fixture.member()).andExpect(jsonPath("$.data.items").isEmpty())
                 .andExpect(jsonPath("$.data.total").value(0));
+
+        designateGuide(teamId, originalCaseId.longValue(), fixture.leader(), initialShareVersion.intValue())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("SHARING_REVOKED"));
+        String nextApproval = """
+                {"shared":true,"expectedShareVersion":2,"previewId":%d,"previewVersion":1}
+                """.formatted(createSharePreview(feedback.getId(), fixture.member()));
+        String approvedAgain = share(feedback.getId(), fixture.member(), nextApproval)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.shareVersion").value(3))
+                .andReturn().getResponse().getContentAsString();
+        Number newCaseId = JsonPath.read(approvedAgain, "$.data.sharedCaseId");
+        assertThat(newCaseId.longValue()).isNotEqualTo(originalCaseId.longValue());
+        designateGuide(teamId, originalCaseId.longValue(), fixture.leader(), 3)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("SHARING_REVOKED"));
+        designateGuide(teamId, newCaseId.longValue(), fixture.leader(), 3)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.sharedCaseId").value(newCaseId.longValue()));
+        request(GUIDES, teamId, fixture.member())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].sharedCaseId").value(newCaseId.longValue()));
     }
 
     @Test
@@ -808,6 +833,25 @@ class SharedFeedbackControllerIntegrationTest {
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(user.getId()))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));
+    }
+
+    private long createSharePreview(Long feedbackId, User user) throws Exception {
+        String body = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/v1/feedbacks/{feedbackId}/share-preview", feedbackId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(user.getId())))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        Number previewId = JsonPath.read(body, "$.data.previewId");
+        return previewId.longValue();
+    }
+
+    private ResultActions designateGuide(Long teamId, Long sharedCaseId, User leader, int expectedVersion)
+            throws Exception {
+        return mockMvc.perform(put("/api/v1/teams/{teamId}/guides/{sharedCaseId}", teamId, sharedCaseId)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessTokens.create(leader.getId()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"expectedShareVersion":%d}
+                        """.formatted(expectedVersion)));
     }
 
     private ResultActions request(String path, Long teamId, User user, String... params) throws Exception {

@@ -5,6 +5,7 @@ import com.babylion.team1.domain.feedback.dto.response.MyFeedbackListResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
 import com.babylion.team1.domain.feedback.entity.Feedback;
 import com.babylion.team1.domain.feedback.entity.FeedbackType;
+import com.babylion.team1.domain.feedback.repository.FeedbackEvidenceRepository;
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository;
 import com.babylion.team1.domain.feedback.repository.GuideRepository;
 import com.babylion.team1.domain.feedback.repository.SharedCaseRepository;
@@ -33,12 +34,14 @@ import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.domain.user.repository.UserRepository;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
+import java.time.Instant;
 import java.time.LocalDate;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -53,6 +56,7 @@ public class TeamService {
     private final TeamGoalRepository teamGoalRepository;
     private final TeamSettingsRepository teamSettingsRepository;
     private final FeedbackRepository feedbackRepository;
+    private final FeedbackEvidenceRepository feedbackEvidenceRepository;
     private final SharedCaseRepository sharedCases;
     private final GuideRepository guides;
 
@@ -158,18 +162,30 @@ public class TeamService {
                 true, teamPageRequest(page, size)));
     }
 
-    @Transactional
-    public GuideAddResponse addGuide(Long feedbackId, Long userId) {
-        Feedback feedback = lockFeedback(feedbackId);
-        requireTeamLeader(feedback.getTeam().getId(), userId);
-        feedback.addToGuide();
-        var designatedAt = feedback.guideAddedAtInKst();
-        sharedCases.findByFeedbackIdAndStatus(feedbackId, SharedCase.Status.ACTIVE).ifPresent(active -> {
-            if (guides.findBySharedCaseId(active.getId()).isEmpty()) {
-                guides.save(new Guide(active, userRepository.getReferenceById(userId), designatedAt.toInstant()));
-            }
-        });
-        return new GuideAddResponse(true, designatedAt);
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public GuideAddResponse addGuide(Long teamId, Long sharedCaseId, Long userId, int expectedShareVersion) {
+        requireMembershipManager(teamId, userId);
+        Long feedbackId = sharedCases.findFeedbackId(sharedCaseId, teamId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        // A31 uses the same lock. Read the case and guide after any earlier request commits.
+        Feedback feedback = feedbackRepository.findByIdForUpdate(feedbackId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        SharedCase sharedCase = sharedCases.findByIdAndTeamId(sharedCaseId, teamId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        if (sharedCase.getStatus() == SharedCase.Status.REVOKED) {
+            throw new CustomException(ErrorCode.SHARING_REVOKED);
+        }
+        if (sharedCase.getStatus() != SharedCase.Status.ACTIVE
+                || feedbackEvidenceRepository.hasDeletedOriginal(feedbackId)) {
+            throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        if (feedback.getShareVersion() != expectedShareVersion) {
+            throw new CustomException(ErrorCode.VERSION_CONFLICT);
+        }
+        if (guides.findBySharedCaseId(sharedCaseId).isEmpty()) {
+            guides.save(new Guide(sharedCase, userRepository.getReferenceById(userId), Instant.now()));
+        }
+        return new GuideAddResponse(sharedCaseId, true);
     }
 
     @Transactional
@@ -202,17 +218,6 @@ public class TeamService {
             throw new CustomException(ErrorCode.INVALID_REQUEST);
         }
         return PageRequest.of(page - 1, size);
-    }
-
-    private TeamMember requireTeamMember(Long teamId, Long userId) {
-        return teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
-                .orElseThrow(() -> new CustomException(ErrorCode.NOT_A_MEMBER));
-    }
-
-    private void requireTeamLeader(Long teamId, Long userId) {
-        if (!requireTeamMember(teamId, userId).isLeader()) {
-            throw new CustomException(ErrorCode.LEADER_ONLY);
-        }
     }
 
     private boolean isDuplicateMembership(DataIntegrityViolationException exception) {

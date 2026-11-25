@@ -1,5 +1,7 @@
 package com.babylion.team1.domain.team.controller;
 
+import com.babylion.team1.domain.feedback.dto.request.GuideAddRequest;
+import com.babylion.team1.domain.feedback.dto.response.GuideAddResponse;
 import com.babylion.team1.domain.feedback.dto.response.MyFeedbackListResponse;
 import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
@@ -25,6 +27,7 @@ import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -124,5 +127,16 @@ public class TeamController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.success("S200", "조회 성공", teamService.getGuides(teamId, userId, type, page, size));
+    }
+
+    @Operation(summary = "개선 가이드 지정")
+    @PutMapping("/{teamId}/guides/{sharedCaseId}")
+    public ApiResponse<GuideAddResponse> addGuide(
+            @PathVariable Long teamId,
+            @PathVariable Long sharedCaseId,
+            @AuthenticationPrincipal Long userId,
+            @Valid @RequestBody GuideAddRequest request) {
+        return ApiResponse.success("S200", "가이드 지정 성공",
+                teamService.addGuide(teamId, sharedCaseId, userId, request.expectedShareVersion()));
     }
 }

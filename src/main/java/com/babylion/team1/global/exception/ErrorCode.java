@@ -50,6 +50,7 @@ public enum ErrorCode {
     SOURCE_DELETED(HttpStatus.GONE, "SOURCE_DELETED", "원문이 삭제되었습니다."),
     PREVIEW_EXPIRED(HttpStatus.GONE, "PREVIEW_EXPIRED", "공유 미리보기가 만료되었습니다."),
     VERSION_CONFLICT(HttpStatus.CONFLICT, "VERSION_CONFLICT", "저장된 버전이 변경되었습니다. 최신 값을 확인해 주세요."),
+    SHARING_REVOKED(HttpStatus.CONFLICT, "SHARING_REVOKED", "공유가 철회된 사례입니다."),
     TEAM_NOT_FOUND(HttpStatus.NOT_FOUND, "TEAM_NOT_FOUND", "팀을 찾을 수 없습니다."),
     ALREADY_MEMBER(HttpStatus.CONFLICT, "ALREADY_MEMBER", "이미 팀 멤버입니다."),
 
