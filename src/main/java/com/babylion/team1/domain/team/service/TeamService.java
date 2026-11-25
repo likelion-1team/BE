@@ -139,7 +139,8 @@ public class TeamService {
         var rows = feedbackRepository.findVerifiedFeedback(teamId, userId, from, to, type,
                 FeedbackType.alternateValue(type), "FREQUENCY".equals(sort), PageRequest.of(page - 1, size));
         return new MyFeedbackListResponse(rows.stream().map(row -> new MyFeedbackListResponse.Item(
-                row.getFeedbackId(), row.getItemId(), row.getConversationId(), row.getType(), row.getTitle(),
+                row.getFeedbackId(), row.getItemId(), row.getConversationId(), row.getConversationVersionId(),
+                row.getType(), row.getTitle(),
                 row.getOccurrenceCount(), row.getCreatedAt().atZone(java.time.ZoneId.systemDefault())
                         .withZoneSameInstant(java.time.ZoneId.of("Asia/Seoul")).toOffsetDateTime(),
                 row.getReaction(), row.getSharingStatus(),

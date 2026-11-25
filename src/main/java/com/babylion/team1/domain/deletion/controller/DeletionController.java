@@ -20,13 +20,12 @@ public class DeletionController {
 
     private final DeletionService deletionService;
 
-    /** 경로의 conversationId는 conversations.id가 아니라 입력 버전 ID(conversation_versions.id)다(v4 명세 8장, ERD v4). */
-    @DeleteMapping("/api/v1/conversations/{conversationId}")
+    @DeleteMapping("/api/v1/conversation-versions/{conversationVersionId}")
     public ResponseEntity<ApiResponse<DeletionRequestResponse>> requestDeletion(
             @Parameter(description = "입력 버전 ID. 다른 응답의 conversationVersionId 값을 보낸다")
-            @PathVariable Long conversationId,
+            @PathVariable Long conversationVersionId,
             @AuthenticationPrincipal Long userId) {
-        var response = deletionService.requestDeletion(conversationId, userId);
+        var response = deletionService.requestDeletion(conversationVersionId, userId);
         return ResponseEntity.accepted().location(URI.create(response.statusUrl()))
                 .body(ApiResponse.success("S202", "삭제 요청 수락", response));
     }

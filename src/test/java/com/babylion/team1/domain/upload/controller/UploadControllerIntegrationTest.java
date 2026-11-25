@@ -473,11 +473,11 @@ class UploadControllerIntegrationTest {
                         .andExpect(jsonPath("$.data.items[0].analysisStatus").value("SUCCEEDED"))
                         .andExpect(jsonPath("$.data.items[0].succeededCount").value(1))
                         .andExpect(jsonPath("$.data.items[0].failedCount").value(0));
-                Long conversationId = jdbc.queryForObject("""
-                        select v.conversation_id from analysis_items i join conversation_versions v on v.id = i.version_id
+                Long conversationVersionId = jdbc.queryForObject("""
+                        select i.version_id from analysis_items i
                         where i.analysis_id = ?
                         """, Long.class, analysisId);
-                mockMvc.perform(get("/api/v1/conversations/{conversationId}", conversationId)
+                mockMvc.perform(get("/api/v1/conversation-versions/{conversationVersionId}", conversationVersionId)
                                 .header(HttpHeaders.AUTHORIZATION, bearer))
                         .andExpect(status().isOk())
                         .andExpect(jsonPath("$.data.excludedAttachments.length()").value(1))
