@@ -8,7 +8,7 @@ import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
 import com.babylion.team1.domain.team.dto.response.MyTeamsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
-import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
+import com.babylion.team1.domain.team.dto.response.TeamMembersResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
 import com.babylion.team1.domain.team.service.TeamService;
 import com.babylion.team1.global.exception.CustomException;
@@ -18,7 +18,6 @@ import com.babylion.team1.global.response.FieldErrorResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
-import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -74,10 +73,12 @@ public class TeamController {
 
     @Operation(summary = "팀원 목록 및 제출 여부 조회")
     @GetMapping("/{teamId}/members")
-    public ApiResponse<List<TeamMemberListResponse>> getTeamMembers(
+    public ApiResponse<TeamMembersResponse> getTeamMembers(
             @PathVariable Long teamId,
-            @AuthenticationPrincipal Long userId) {
-        return ApiResponse.success("S200", "조회 성공", teamService.getTeamMembers(teamId, userId));
+            @AuthenticationPrincipal Long userId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success("S200", "조회 성공", teamService.getTeamMembers(teamId, userId, page, size));
     }
 
     @Operation(summary = "팀 제출 현황 조회",

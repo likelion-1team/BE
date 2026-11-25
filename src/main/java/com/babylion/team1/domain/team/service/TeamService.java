@@ -17,7 +17,7 @@ import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
 import com.babylion.team1.domain.team.dto.response.MyTeamsResponse;
 import com.babylion.team1.domain.team.dto.response.TeamCreateResponse;
 import com.babylion.team1.domain.team.dto.response.TeamMemberAddResponse;
-import com.babylion.team1.domain.team.dto.response.TeamMemberListResponse;
+import com.babylion.team1.domain.team.dto.response.TeamMembersResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse;
 import com.babylion.team1.domain.team.dto.response.TeamSubmissionResponse.Status;
 import com.babylion.team1.global.policy.ServerPolicy;
@@ -76,20 +76,13 @@ public class TeamService {
 
     @Transactional(readOnly = true)
     public MyTeamsResponse getMyTeams(Long userId, int page, int size) {
-        if (page < 1 || size < 1 || size > MAX_TEAM_PAGE_SIZE || (long) (page - 1) * size > Integer.MAX_VALUE) {
-            throw new CustomException(ErrorCode.INVALID_REQUEST);
-        }
-        var teams = teamMemberRepository.findMyTeams(userId, PageRequest.of(page - 1, size));
+        var teams = teamMemberRepository.findMyTeams(userId, teamPageRequest(page, size));
         return new MyTeamsResponse(teams.getContent(), page, size, teams.getTotalElements());
     }
 
     @Transactional
     public TeamMemberAddResponse addMember(Long teamId, Long requesterId, TeamMemberAddRequest request) {
-        TeamMember requester = teamMemberRepository.findByTeamIdAndUserId(teamId, requesterId)
-                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
-        if (!requester.isLeader()) {
-            throw new CustomException(ErrorCode.ROLE_FORBIDDEN);
-        }
+        TeamMember requester = requireMembershipManager(teamId, requesterId);
 
         User user = userRepository.findByEmail(request.email())
                 .orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND, "가입되지 않은 이메일입니다."));
@@ -107,10 +100,10 @@ public class TeamService {
     }
 
     @Transactional(readOnly = true)
-    public List<TeamMemberListResponse> getTeamMembers(Long teamId, Long userId) {
-        findTeam(teamId);
-        requireTeamLeader(teamId, userId);
-        return teamMemberRepository.findTeamMembersWithSubmission(teamId);
+    public TeamMembersResponse getTeamMembers(Long teamId, Long userId, int page, int size) {
+        requireMembershipManager(teamId, userId);
+        var members = teamMemberRepository.findTeamMembersWithSubmission(teamId, teamPageRequest(page, size));
+        return new TeamMembersResponse(members.getContent(), page, size, members.getTotalElements());
     }
 
     @Transactional(readOnly = true)
@@ -211,6 +204,22 @@ public class TeamService {
     private Team findTeam(Long teamId) {
         return teamRepository.findById(teamId)
                 .orElseThrow(() -> new CustomException(ErrorCode.TEAM_NOT_FOUND));
+    }
+
+    private TeamMember requireMembershipManager(Long teamId, Long userId) {
+        TeamMember member = teamMemberRepository.findByTeamIdAndUserId(teamId, userId)
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        if (!member.isLeader()) {
+            throw new CustomException(ErrorCode.ROLE_FORBIDDEN);
+        }
+        return member;
+    }
+
+    private PageRequest teamPageRequest(int page, int size) {
+        if (page < 1 || size < 1 || size > MAX_TEAM_PAGE_SIZE || (long) (page - 1) * size > Integer.MAX_VALUE) {
+            throw new CustomException(ErrorCode.INVALID_REQUEST);
+        }
+        return PageRequest.of(page - 1, size);
     }
 
     private TeamMember requireTeamMember(Long teamId, Long userId) {

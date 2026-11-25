@@ -68,18 +68,60 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(jsonPath("$.message").value("조회 성공"))
                 .andExpect(jsonPath("$.errors").value(nullValue()))
                 .andExpect(jsonPath("$.timestamp", endsWith("+09:00")))
-                .andExpect(jsonPath("$.data.length()").value(2))
-                .andExpect(jsonPath("$.data[0].userId").value(fixture.leader().getId()))
-                .andExpect(jsonPath("$.data[0].name").value(fixture.leader().getName()))
-                .andExpect(jsonPath("$.data[0].email").value(fixture.leader().getEmail()))
-                .andExpect(jsonPath("$.data[0].role").value("LEADER"))
-                .andExpect(jsonPath("$.data[0].submitted").value(true))
-                .andExpect(jsonPath("$.data[1].userId").value(member.getId()))
-                .andExpect(jsonPath("$.data[1].name").value(member.getName()))
-                .andExpect(jsonPath("$.data[1].email").value(member.getEmail()))
-                .andExpect(jsonPath("$.data[1].role").value("MEMBER"))
-                .andExpect(jsonPath("$.data[1].submitted").value(true))
-                .andExpect(jsonPath("$.data[1].conversationCount").doesNotExist());
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items.length()").value(2))
+                .andExpect(jsonPath("$.data.items[0].userId").value(fixture.leader().getId()))
+                .andExpect(jsonPath("$.data.items[0].name").value(fixture.leader().getName()))
+                .andExpect(jsonPath("$.data.items[0].email").value(fixture.leader().getEmail()))
+                .andExpect(jsonPath("$.data.items[0].role").value("LEADER"))
+                .andExpect(jsonPath("$.data.items[0].submitted").value(true))
+                .andExpect(jsonPath("$.data.items[1].userId").value(member.getId()))
+                .andExpect(jsonPath("$.data.items[1].name").value(member.getName()))
+                .andExpect(jsonPath("$.data.items[1].email").value(member.getEmail()))
+                .andExpect(jsonPath("$.data.items[1].role").value("MEMBER"))
+                .andExpect(jsonPath("$.data.items[1].submitted").value(true))
+                .andExpect(jsonPath("$.data.items[1].conversationCount").doesNotExist());
+    }
+
+    @Test
+    void paginatesByMembershipWithStableTotals() throws Exception {
+        TeamFixture fixture = createTeam(saveUser("팀장"));
+        User member = addMember(fixture, "팀원");
+        createTeam(saveUser("다른 팀장"));
+        String token = "Bearer " + accessTokens.create(fixture.leader().getId());
+        Long teamId = fixture.team().getId();
+
+        mockMvc.perform(get(PATH, teamId).param("page", "1").param("size", "1")
+                        .header(HttpHeaders.AUTHORIZATION, token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.size").value(1))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].userId").value(fixture.leader().getId()));
+        mockMvc.perform(get(PATH, teamId).param("page", "2").param("size", "1")
+                        .header(HttpHeaders.AUTHORIZATION, token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.page").value(2))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].userId").value(member.getId()));
+        mockMvc.perform(get(PATH, teamId).param("page", "3").param("size", "1")
+                        .header(HttpHeaders.AUTHORIZATION, token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.total").value(2));
+        mockMvc.perform(get(PATH, teamId).param("size", "100").header(HttpHeaders.AUTHORIZATION, token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.size").value(100));
+        mockMvc.perform(get(PATH, teamId).param("size", "101").header(HttpHeaders.AUTHORIZATION, token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mockMvc.perform(get(PATH, teamId).param("page", "0").header(HttpHeaders.AUTHORIZATION, token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
     }
 
     @Test
@@ -95,10 +137,10 @@ class TeamMemberListControllerIntegrationTest {
 
         listMembers(fixture.team().getId(), fixture.leader())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(2))
-                .andExpect(jsonPath("$.data[0].submitted").value(false))
-                .andExpect(jsonPath("$.data[1].userId").value(member.getId()))
-                .andExpect(jsonPath("$.data[1].submitted").value(false));
+                .andExpect(jsonPath("$.data.items.length()").value(2))
+                .andExpect(jsonPath("$.data.items[0].submitted").value(false))
+                .andExpect(jsonPath("$.data.items[1].userId").value(member.getId()))
+                .andExpect(jsonPath("$.data.items[1].submitted").value(false));
     }
 
     @ParameterizedTest
@@ -111,7 +153,7 @@ class TeamMemberListControllerIntegrationTest {
 
         listMembers(fixture.team().getId(), fixture.leader())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data[1].submitted").value(false));
+                .andExpect(jsonPath("$.data.items[1].submitted").value(false));
     }
 
     @Test
@@ -122,14 +164,14 @@ class TeamMemberListControllerIntegrationTest {
 
         listMembers(fixture.team().getId(), fixture.leader())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(2))
-                .andExpect(jsonPath("$.data[1].submitted").value(false));
+                .andExpect(jsonPath("$.data.items.length()").value(2))
+                .andExpect(jsonPath("$.data.items[1].submitted").value(false));
 
         TeamSettings settings = TeamSettings.createDefault(fixture.team());
         entityManager.persist(settings);
         listMembers(fixture.team().getId(), fixture.leader())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data[1].submitted").value(false));
+                .andExpect(jsonPath("$.data.items[1].submitted").value(false));
     }
 
     @Test
@@ -139,15 +181,15 @@ class TeamMemberListControllerIntegrationTest {
         createTeam(otherLeader);
 
         listMembers(fixture.team().getId(), otherLeader)
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         entityManager.persist(TeamMember.member(fixture.team(), otherLeader));
         listMembers(fixture.team().getId(), otherLeader)
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("LEADER_ONLY"));
+                .andExpect(jsonPath("$.code").value("ROLE_FORBIDDEN"));
         listMembers(Long.MAX_VALUE, otherLeader)
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("TEAM_NOT_FOUND"));
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
 
     @Test
@@ -241,11 +283,11 @@ class TeamMemberListControllerIntegrationTest {
 
         listMembers(fixture.team().getId(), fixture.leader())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(2))
-                .andExpect(jsonPath("$.data[0].userId").value(fixture.leader().getId()))
-                .andExpect(jsonPath("$.data[0].submitted").value(true))
-                .andExpect(jsonPath("$.data[1].userId").value(member.getId()))
-                .andExpect(jsonPath("$.data[1].submitted").value(false));
+                .andExpect(jsonPath("$.data.items.length()").value(2))
+                .andExpect(jsonPath("$.data.items[0].userId").value(fixture.leader().getId()))
+                .andExpect(jsonPath("$.data.items[0].submitted").value(true))
+                .andExpect(jsonPath("$.data.items[1].userId").value(member.getId()))
+                .andExpect(jsonPath("$.data.items[1].submitted").value(false));
     }
 
     @Test
@@ -328,10 +370,10 @@ class TeamMemberListControllerIntegrationTest {
 
         listMembers(fixture.team().getId(), fixture.leader())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(3))
-                .andExpect(jsonPath("$.data[0].submitted").value(false))
-                .andExpect(jsonPath("$.data[1].submitted").value(true))
-                .andExpect(jsonPath("$.data[2].submitted").value(true));
+                .andExpect(jsonPath("$.data.items.length()").value(3))
+                .andExpect(jsonPath("$.data.items[0].submitted").value(false))
+                .andExpect(jsonPath("$.data.items[1].submitted").value(true))
+                .andExpect(jsonPath("$.data.items[2].submitted").value(true));
         submissions(fixture.team().getId(), fixture.leader()).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.submittedMembers").value(2))
                 .andExpect(jsonPath("$.data.totalMembers").value(3))
