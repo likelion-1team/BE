@@ -1,6 +1,7 @@
 package com.babylion.team1.domain.upload.service;
 
 import com.babylion.team1.domain.analysis.entity.Analysis;
+import com.babylion.team1.domain.analysis.entity.AnalysisStatus;
 import com.babylion.team1.domain.analysis.repository.AnalysisRepository;
 import com.babylion.team1.domain.conversation.repository.ConversationRepository;
 import com.babylion.team1.domain.conversation.repository.ConversationRepository.UploadConversationCount;
@@ -13,7 +14,6 @@ import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
@@ -35,14 +35,14 @@ public class UploadHistoryService {
     @Transactional(readOnly = true)
     public UploadHistoryResponse getMyUploads(Long teamId, Long userId, int page, int size) {
         teamMembers.findByTeamIdAndUserId(teamId, userId)
-                .orElseThrow(() -> new CustomException(ErrorCode.NOT_A_MEMBER));
+                .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
 
-        if (page < 0 || size < 1 || (long) page * size > Integer.MAX_VALUE) {
+        if (page < 1 || size < 1 || size > 100 || (long) (page - 1) * size > Integer.MAX_VALUE) {
             throw new CustomException(ErrorCode.INVALID_REQUEST);
         }
 
         var history = uploads.findByTeamIdAndUploaderIdOrderByUploadedAtDescIdDesc(
-                teamId, userId, PageRequest.of(page, size));
+                teamId, userId, PageRequest.of(page - 1, size));
         var uploadIds = history.stream().map(Upload::getId).toList();
         Map<Long, Analysis> analysisByUpload = uploadIds.isEmpty() ? Map.of() : analyses.findByUploadIdIn(uploadIds)
                 .stream().collect(Collectors.toMap(analysis -> analysis.getUpload().getId(), analysis -> analysis));
@@ -56,17 +56,25 @@ public class UploadHistoryService {
         var now = LocalDateTime.now();
         var items = history.stream().map(upload -> toItem(upload, analysisByUpload.get(upload.getId()),
                 counts.getOrDefault(upload.getId(), 0L), now)).toList();
-        return new UploadHistoryResponse(items, history.getNumber(), history.getSize(), history.getTotalElements());
+        return new UploadHistoryResponse(items, page, history.getSize(), history.getTotalElements());
     }
 
     private UploadHistoryResponse.Item toItem(Upload upload, Analysis analysis, long legacyCount, LocalDateTime now) {
-        var period = upload.getTargetFrom() == null || upload.getTargetTo() == null ? null
-                : new UploadHistoryResponse.Period(upload.getTargetFrom(), upload.getTargetTo());
-        String uploadedAt = upload.getUploadedAt().atZone(ZoneId.systemDefault()).withZoneSameInstant(KST)
-                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
-        long analyzedCount = analysis == null ? legacyCount : analysis.getSucceededCount();
-        return new UploadHistoryResponse.Item(upload.getId(), uploadedAt, analyzedCount, period, upload.lifecycleStatus(now),
-                analysis == null ? null : analysis.getId(), analysis == null ? null : analysis.getStatus(),
-                analysis == null ? null : analysis.getSucceededCount(), analysis == null ? null : analysis.getFailedCount());
+        var createdAt = upload.getUploadedAt().atZone(ZoneId.systemDefault()).withZoneSameInstant(KST).toOffsetDateTime();
+        if (analysis == null) {
+            boolean completed = upload.getStatus() == UploadStatus.DONE;
+            return new UploadHistoryResponse.Item(upload.getId(), createdAt, upload.lifecycleStatus(now), null,
+                    completed ? AnalysisStatus.SUCCEEDED : null, completed ? upload.getSelectedCount() : null,
+                    completed ? legacyCount : null, completed ? 0 : null, upload.getTargetFrom(), upload.getTargetTo());
+        }
+
+        boolean finished = switch (analysis.getStatus()) {
+            case SUCCEEDED, PARTIALLY_SUCCEEDED, FAILED -> true;
+            case QUEUED, RUNNING -> false;
+        };
+        return new UploadHistoryResponse.Item(upload.getId(), createdAt, upload.lifecycleStatus(now),
+                analysis.getId(), analysis.getStatus(), analysis.getSelectedCount(),
+                finished ? (long) analysis.getSucceededCount() : null, finished ? analysis.getFailedCount() : null,
+                upload.getTargetFrom(), upload.getTargetTo());
     }
 }
