@@ -80,7 +80,10 @@ class ChatGptExportReader {
                     String externalId = id.isNull() || id.isMissingNode()
                             ? conversation.path("conversation_id").asString() : id.asString();
                     if (selectedIds.contains(externalId)) {
-                        selected.putIfAbsent(externalId, conversation);
+                        var previous = selected.putIfAbsent(externalId, conversation);
+                        if (previous != null && !previous.equals(conversation)) {
+                            throw new CustomException(ErrorCode.CONFLICTING_CONVERSATION_ID);
+                        }
                     }
                 }
                 if (parser.nextToken() != null) {
@@ -159,6 +162,7 @@ class ChatGptExportReader {
 
     private CandidateExport readJson(InputStream input, LocalDate from, LocalDate to, boolean hashContent) {
         Map<String, ExportConversation> candidates = new LinkedHashMap<>();
+        Map<String, ExportConversation> seen = new LinkedHashMap<>();
         int conversationCount = 0;
         try (JsonParser parser = jsonFactory.createParser(ObjectReadContext.empty(), input)) {
             if (parser.nextToken() != START_ARRAY) {
@@ -170,6 +174,10 @@ class ChatGptExportReader {
                 }
                 conversationCount++;
                 ExportConversation conversation = readConversation(parser, hashContent);
+                var previous = seen.putIfAbsent(conversation.externalId(), conversation);
+                if (previous != null && !previous.equals(conversation)) {
+                    throw new CustomException(ErrorCode.CONFLICTING_CONVERSATION_ID);
+                }
                 LocalDate date = conversation.startedAt().toLocalDate();
                 if (!date.isBefore(from) && !date.isAfter(to)) {
                     candidates.putIfAbsent(conversation.externalId(), conversation);
