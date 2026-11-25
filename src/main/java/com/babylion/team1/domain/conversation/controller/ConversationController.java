@@ -16,12 +16,12 @@ public class ConversationController {
 
     private final ConversationService conversationService;
 
-    @GetMapping("/api/v1/conversations/{conversationId}")
+    @GetMapping("/api/v1/conversation-versions/{conversationVersionId}")
     public ApiResponse<ConversationDetailResponse> getDetail(
-            @PathVariable Long conversationId,
+            @PathVariable Long conversationVersionId,
             @RequestParam(required = false) Long highlightFeedbackId,
             @AuthenticationPrincipal Long userId) {
         return ApiResponse.success("S200", "조회 성공",
-                conversationService.getDetail(conversationId, highlightFeedbackId, userId));
+                conversationService.getDetail(conversationVersionId, highlightFeedbackId, userId));
     }
 }

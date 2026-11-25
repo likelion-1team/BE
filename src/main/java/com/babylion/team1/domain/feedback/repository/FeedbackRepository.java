@@ -44,6 +44,7 @@ public interface FeedbackRepository extends JpaRepository<Feedback, Long> {
 
     @Query(value = """
             select f.id as feedbackId, min(i.id) as itemId, min(c.id) as conversationId,
+                min(v.id) as conversationVersionId,
                 f.type as type, f.title as title, count(distinct m.id) as occurrenceCount,
                 f.created_at as createdAt, r.reaction as reaction,
                 case when exists (select 1 from shared_cases sc where sc.feedback_id = f.id and sc.status = 'ACTIVE')
@@ -60,6 +61,7 @@ public interface FeedbackRepository extends JpaRepository<Feedback, Long> {
         Long getFeedbackId();
         Long getItemId();
         Long getConversationId();
+        Long getConversationVersionId();
         String getType();
         String getTitle();
         long getOccurrenceCount();

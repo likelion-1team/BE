@@ -1,6 +1,5 @@
 package com.babylion.team1.domain.conversation.dto.response;
 
-import com.babylion.team1.domain.conversation.entity.Conversation;
 import com.babylion.team1.domain.conversation.entity.ConversationVersion;
 import com.babylion.team1.domain.conversation.entity.Message;
 import java.time.OffsetDateTime;
@@ -12,13 +11,11 @@ public record ConversationDetailResponse(Long conversationId, Long conversationV
         List<MessageItem> messages) {
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 
-    public static ConversationDetailResponse from(Conversation conversation, ConversationVersion version,
-                                                 List<Message> messages, List<String> highlights) {
-        return new ConversationDetailResponse(conversation.getId(), version == null ? null : version.getId(),
-                version == null ? conversation.getTitle() : version.getTitle(),
-                version == null ? conversation.getStartedAt().atZone(KST).toOffsetDateTime()
-                        : version.getStartedAt().atZone(KST).toOffsetDateTime(),
-                version == null ? List.of() : version.getExcludedAttachments(), highlights, messages.stream().map(MessageItem::from).toList());
+    public static ConversationDetailResponse from(ConversationVersion version, List<Message> messages,
+                                                  List<String> highlights) {
+        return new ConversationDetailResponse(version.getConversation().getId(), version.getId(), version.getTitle(),
+                version.getStartedAt().atZone(KST).toOffsetDateTime(), version.getExcludedAttachments(),
+                highlights, messages.stream().map(MessageItem::from).toList());
     }
 
     public record MessageItem(String messageId, String role, String content, OffsetDateTime createdAt) {

@@ -167,22 +167,31 @@ class SharedFeedbackControllerIntegrationTest {
 
     @Test
     void conversationDetailReturnsOrderedMessagesAndOnlyMatchingEvidenceToOwner() throws Exception {
-        String path = "/api/v1/conversations/{conversationId}";
+        String path = "/api/v1/conversation-versions/{conversationVersionId}";
         TeamFixture fixture = saveTeam();
         Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "근거 피드백", null);
         feedback.share();
         Long conversationId = addPrivateEvidence(feedback);
         Conversation conversation = entityManager.find(Conversation.class, conversationId);
-        entityManager.persist(Message.builder().conversation(conversation).role(MessageRole.ASSISTANT)
+        var version = saveConversationVersion(conversation, 1, "보호된 원문");
+        var settings = TeamSettings.createDefault(fixture.team());
+        entityManager.persist(settings);
+        var analysis = Analysis.builder().upload(feedback.getUpload()).team(fixture.team()).user(fixture.member())
+                .settings(settings).idempotencyKey("conversation-evidence").requestHash("a".repeat(64))
+                .selectedCount(1).build();
+        entityManager.persist(analysis);
+        entityManager.persist(AnalysisItem.builder().analysis(analysis).version(version).team(fixture.team())
+                .user(fixture.member()).taskType(fixture.taskType()).conversationDate(DATE).build());
+        entityManager.persist(Message.builder().conversation(conversation).version(version).role(MessageRole.ASSISTANT)
                 .idx(2).content("수정한 응답").build());
-        entityManager.persist(Message.builder().conversation(conversation).role(MessageRole.USER)
+        entityManager.persist(Message.builder().conversation(conversation).version(version).role(MessageRole.USER)
                 .idx(1).content("다시 작성해 줘").isRework(true).build());
         Feedback unrelated = saveFeedback(fixture.taskType(), fixture.member(), LONG_CONVERSATION, "다른 대화", null);
         addPrivateEvidence(unrelated);
         entityManager.flush();
         entityManager.clear();
 
-        request(path, conversationId, fixture.member(), "highlightFeedbackId", feedback.getId().toString())
+        request(path, version.getId(), fixture.member(), "highlightFeedbackId", feedback.getId().toString())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
                 .andExpect(jsonPath("$.data.startedAt").value(DATE + "T12:00:00+09:00"))
@@ -192,24 +201,24 @@ class SharedFeedbackControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.messages[1].role").value("USER"))
                 .andExpect(jsonPath("$.data.messages[2].role").value("ASSISTANT"))
                 .andExpect(jsonPath("$.data.highlightMessageIds[0]").value("m_0"));
-        request(path, conversationId, fixture.member())
+        request(path, version.getId(), fixture.member())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.highlightMessageIds").isEmpty());
-        request(path, conversationId, fixture.member(), "highlightFeedbackId", unrelated.getId().toString())
+        request(path, version.getId(), fixture.member(), "highlightFeedbackId", unrelated.getId().toString())
                 .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
-        request(path, conversationId, fixture.leader())
+        request(path, version.getId(), fixture.leader())
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         request(path, Long.MAX_VALUE, fixture.member())
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
-        mockMvc.perform(get(path, conversationId)).andExpect(status().isUnauthorized());
+        mockMvc.perform(get(path, version.getId())).andExpect(status().isUnauthorized());
     }
 
     @Test
     void conversationDetailSwitchesVersionsWithoutMixingMessages() throws Exception {
-        String path = "/api/v1/conversations/{conversationId}";
+        String path = "/api/v1/conversation-versions/{conversationVersionId}";
         TeamFixture fixture = saveTeam();
         Feedback feedback = saveFeedback(fixture.taskType(), fixture.member(), MISSING_CONTEXT, "버전 테스트", null);
         Long conversationId = addPrivateEvidence(feedback);
@@ -220,7 +229,7 @@ class SharedFeedbackControllerIntegrationTest {
         entityManager.flush();
         entityManager.clear();
 
-        request(path, conversationId, fixture.member())
+        request(path, first.getId(), fixture.member())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.messages.length()").value(1))
                 .andExpect(jsonPath("$.data.messages[0].content").value("첫 번째 원문"));
@@ -230,7 +239,10 @@ class SharedFeedbackControllerIntegrationTest {
         entityManager.flush();
         entityManager.clear();
 
-        request(path, conversationId, fixture.member())
+        request(path, first.getId(), fixture.member())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.messages[0].content").value("첫 번째 원문"));
+        request(path, second.getId(), fixture.member())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.messages.length()").value(1))
                 .andExpect(jsonPath("$.data.messages[0].content").value("재업로드 원문"));

@@ -1,10 +1,9 @@
 package com.babylion.team1.domain.conversation.service;
 
-import com.babylion.team1.domain.analysis.entity.AnalysisItem;
 import com.babylion.team1.domain.analysis.repository.AnalysisItemRepository;
 import com.babylion.team1.domain.conversation.entity.Message;
 import com.babylion.team1.domain.conversation.dto.response.ConversationDetailResponse;
-import com.babylion.team1.domain.conversation.repository.ConversationRepository;
+import com.babylion.team1.domain.conversation.repository.ConversationVersionRepository;
 import com.babylion.team1.domain.conversation.repository.MessageRepository;
 import com.babylion.team1.domain.feedback.repository.FeedbackEvidenceRepository;
 import com.babylion.team1.global.exception.CustomException;
@@ -18,44 +17,37 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class ConversationService {
 
-    private final ConversationRepository conversationRepository;
+    private final ConversationVersionRepository versionRepository;
     private final MessageRepository messageRepository;
     private final FeedbackEvidenceRepository evidenceRepository;
     private final AnalysisItemRepository items;
 
     @Transactional(readOnly = true)
-    public ConversationDetailResponse getDetail(Long conversationId, Long highlightFeedbackId, Long userId) {
-        var conversation = conversationRepository.findById(conversationId)
+    public ConversationDetailResponse getDetail(Long conversationVersionId, Long highlightFeedbackId, Long userId) {
+        var version = versionRepository.findById(conversationVersionId)
                 .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND));
+        var conversation = version.getConversation();
         if (!conversation.isOwnedBy(userId)) {
             throw new CustomException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        if (version.getDeletedAt() != null) {
+            throw new CustomException(ErrorCode.SOURCE_DELETED);
+        }
 
-        var currentVersion = conversation.getCurrentVersion();
         var indexes = new HashSet<Integer>();
         if (highlightFeedbackId != null) {
             var evidence = evidenceRepository.findByFeedbackIdAndConversationIdAndFeedbackUserId(
-                    highlightFeedbackId, conversationId, userId);
-            if (evidence.isEmpty()) {
-                // 원문을 삭제하면 피드백도 지워지므로, 피드백이 없다는 안내보다 삭제 안내를 먼저 한다.
-                throw new CustomException(currentVersion != null && currentVersion.getDeletedAt() != null
-                        ? ErrorCode.SOURCE_DELETED : ErrorCode.VALIDATION_FAILED);
+                    highlightFeedbackId, conversation.getId(), userId);
+            if (evidence.isEmpty() || items.findForFeedback(evidence.get(0).getFeedback().getUpload().getId(),
+                    conversation.getId()).filter(item -> item.getVersion().getId().equals(conversationVersionId))
+                    .isEmpty()) {
+                throw new CustomException(ErrorCode.VALIDATION_FAILED);
             }
-            var item = items.findForFeedback(evidence.get(0).getFeedback().getUpload().getId(), conversationId);
-            if (item.isEmpty() && currentVersion != null && currentVersion.getDeletedAt() != null) {
-                throw new CustomException(ErrorCode.SOURCE_DELETED);
-            }
-            currentVersion = item.map(AnalysisItem::getVersion).orElse(null);
             evidence.forEach(row -> indexes.addAll(row.getTurnIndexes()));
         }
-        if (currentVersion != null && currentVersion.getDeletedAt() != null) {
-            throw new CustomException(ErrorCode.SOURCE_DELETED);
-        }
-        var messages = currentVersion == null
-                ? messageRepository.findLegacyMessagesOrdered(conversationId)
-                : messageRepository.findByVersionIdOrderByIdxAsc(currentVersion.getId());
+        var messages = messageRepository.findByVersionIdOrderByIdxAsc(conversationVersionId);
         var highlights = messages.stream().filter(message -> indexes.contains(message.getIdx()))
                 .map(Message::getMessageKey).toList();
-        return ConversationDetailResponse.from(conversation, currentVersion, messages, highlights);
+        return ConversationDetailResponse.from(version, messages, highlights);
     }
 }

@@ -76,7 +76,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Import(DashboardFixture.class)
 class DeletionIntegrationTest {
 
-    private static final String CONVERSATION = "/api/v1/conversations/{conversationId}";
+    private static final String CONVERSATION_VERSION = "/api/v1/conversation-versions/{conversationVersionId}";
     private static final String JOB = "/api/v1/deletion-jobs/{deletionJobId}";
     private static final LocalDate DATE = LocalDate.of(2026, 11, 20);
 
@@ -159,7 +159,7 @@ class DeletionIntegrationTest {
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         requestDeletion(Long.MAX_VALUE, owner).andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
-        mockMvc.perform(delete(CONVERSATION, source.versionId())).andExpect(status().isUnauthorized());
+        mockMvc.perform(delete(CONVERSATION_VERSION, source.versionId())).andExpect(status().isUnauthorized());
 
         assertThat(count("deletion_jobs where version_id = ?", source.versionId())).isZero();
         assertThat(count("conversation_versions where id = ? and deleted_at is null", source.versionId())).isOne();
@@ -207,13 +207,23 @@ class DeletionIntegrationTest {
         });
         sharedCases().andExpect(jsonPath("$.data.total").value(1));
         guides().andExpect(jsonPath("$.data.total").value(1));
-        myFeedbacks().andExpect(jsonPath("$.data.total").value(1));
+        var list = myFeedbacks().andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].conversationVersionId").value(source.versionId()));
+        String body = list.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        Long versionId = ((Number) JsonPath.read(body, "$.data.items[0].conversationVersionId")).longValue();
+        getAs(owner, "/api/v1/feedbacks/{feedbackId}", source.feedbackId())
+                .andExpect(jsonPath("$.data.conversationVersionId").value(versionId));
+        mockMvc.perform(authorized(get(CONVERSATION_VERSION, versionId), owner)
+                        .param("highlightFeedbackId", source.feedbackId().toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conversationVersionId").value(versionId))
+                .andExpect(jsonPath("$.data.highlightMessageIds[0]").value("m_0"));
         kpis().andExpect(jsonPath("$.data.coverage.inScopeCount").value(1));
         topFeedbackTypes().andExpect(jsonPath("$.data.items[0].topFeedbackTypes[0]").value("MISSING_CONTEXT"));
 
-        requestDeletion(source.versionId(), owner).andExpect(status().isAccepted());
+        requestDeletion(versionId, owner).andExpect(status().isAccepted());
 
-        getAs(owner, CONVERSATION, source.conversationId()).andExpect(status().isGone())
+        getAs(owner, CONVERSATION_VERSION, source.versionId()).andExpect(status().isGone())
                 .andExpect(jsonPath("$.code").value("SOURCE_DELETED"));
         getAs(owner, "/api/v1/feedbacks/{id}", source.feedbackId()).andExpect(status().isGone());
         getAs(owner, "/api/v1/analyses/{id}/items", source.analysisId()).andExpect(jsonPath("$.data.total").value(0));
@@ -274,7 +284,7 @@ class DeletionIntegrationTest {
         requestDeletion(source.versionId(), owner).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.deletionJobId").value(jobId))
                 .andExpect(jsonPath("$.data.status").value("COMPLETED"));
-        mockMvc.perform(authorized(get(CONVERSATION, source.conversationId()), owner)
+        mockMvc.perform(authorized(get(CONVERSATION_VERSION, source.versionId()), owner)
                         .param("highlightFeedbackId", source.feedbackId().toString()))
                 .andExpect(status().isGone()).andExpect(jsonPath("$.code").value("SOURCE_DELETED"));
     }
@@ -324,7 +334,7 @@ class DeletionIntegrationTest {
                 .andExpect(jsonPath("$.data.failureCode").value("DELETION_FAILED"))
                 .andExpect(jsonPath("$.data.completedAt").isEmpty());
         assertThat(count("feedbacks where id = ?", source.feedbackId())).as("실패하면 전부 되돌린다").isOne();
-        getAs(owner, CONVERSATION, source.conversationId()).andExpect(status().isGone());
+        getAs(owner, CONVERSATION_VERSION, source.versionId()).andExpect(status().isGone());
 
         doNothing().when(processor).process(anyLong());
         requestDeletion(source.versionId(), owner).andExpect(jsonPath("$.data.deletionJobId").value(jobId))
@@ -414,7 +424,7 @@ class DeletionIntegrationTest {
     private CompletableFuture<Long> deleteAsync(String token) {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                return deletionJobId(mockMvc.perform(delete(CONVERSATION, source.versionId())
+                return deletionJobId(mockMvc.perform(delete(CONVERSATION_VERSION, source.versionId())
                         .header(HttpHeaders.AUTHORIZATION, token)).andExpect(status().isAccepted()));
             } catch (Exception exception) {
                 throw new IllegalStateException(exception);
@@ -423,7 +433,7 @@ class DeletionIntegrationTest {
     }
 
     private ResultActions requestDeletion(Long versionId, User user) throws Exception {
-        return mockMvc.perform(authorized(delete(CONVERSATION, versionId), user));
+        return mockMvc.perform(authorized(delete(CONVERSATION_VERSION, versionId), user));
     }
 
     private ResultActions sharedCases() throws Exception {
