@@ -8,6 +8,11 @@ import com.babylion.team1.domain.feedback.dto.response.SharedCasesResponse;
 import com.babylion.team1.domain.feedback.entity.Feedback;
 import com.babylion.team1.domain.feedback.entity.FeedbackType;
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository;
+import com.babylion.team1.domain.feedback.repository.GuideRepository;
+import com.babylion.team1.domain.feedback.repository.SharedCaseRepository;
+import com.babylion.team1.domain.feedback.entity.SharedCase;
+import com.babylion.team1.domain.feedback.entity.Guide;
+import com.babylion.team1.domain.feedback.dto.response.SharePreviewResponse.Content;
 import com.babylion.team1.domain.feedback.repository.FeedbackRepository.MyFeedbackRow;
 import com.babylion.team1.domain.team.dto.request.TeamCreateRequest;
 import com.babylion.team1.domain.team.dto.request.TeamMemberAddRequest;
@@ -57,6 +62,8 @@ public class TeamService {
     private final TeamGoalRepository teamGoalRepository;
     private final TeamSettingsRepository teamSettingsRepository;
     private final FeedbackRepository feedbackRepository;
+    private final SharedCaseRepository sharedCases;
+    private final GuideRepository guides;
 
     @Transactional
     public TeamCreateResponse createTeam(Long userId, TeamCreateRequest request) {
@@ -177,15 +184,25 @@ public class TeamService {
     public SharedCasesResponse getSharedCases(Long teamId, Long userId, Long taskTypeId, String type) {
         findTeam(teamId);
         requireTeamLeader(teamId, userId);
-        return SharedCasesResponse.from(feedbackRepository.findSharedCases(
-                teamId, taskTypeId, type, FeedbackType.alternateValue(type)));
+        var feedbacks = feedbackRepository.findSharedCases(teamId, taskTypeId, type, FeedbackType.alternateValue(type));
+        return SharedCasesResponse.from(feedbacks, approvedSnapshots(feedbacks));
     }
 
     @Transactional(readOnly = true)
     public GuidesResponse getGuides(Long teamId, Long userId, String type) {
         findTeam(teamId);
         requireTeamMember(teamId, userId);
-        return GuidesResponse.from(feedbackRepository.findGuides(teamId, type, FeedbackType.alternateValue(type)));
+        var feedbacks = feedbackRepository.findGuides(teamId, type, FeedbackType.alternateValue(type));
+        return GuidesResponse.from(feedbacks, approvedSnapshots(feedbacks));
+    }
+
+    private java.util.Map<Long, Content> approvedSnapshots(List<Feedback> feedbacks) {
+        if (feedbacks.isEmpty()) {
+            return java.util.Map.of();
+        }
+        return sharedCases.findByFeedbackIdInAndStatus(feedbacks.stream().map(Feedback::getId).toList(),
+                        SharedCase.Status.ACTIVE).stream()
+                .collect(java.util.stream.Collectors.toMap(row -> row.getFeedback().getId(), SharedCase::getContent));
     }
 
     @Transactional
@@ -193,7 +210,13 @@ public class TeamService {
         Feedback feedback = lockFeedback(feedbackId);
         requireTeamLeader(feedback.getTeam().getId(), userId);
         feedback.addToGuide();
-        return new GuideAddResponse(true, feedback.guideAddedAtInKst());
+        var designatedAt = feedback.guideAddedAtInKst();
+        sharedCases.findByFeedbackIdAndStatus(feedbackId, SharedCase.Status.ACTIVE).ifPresent(active -> {
+            if (guides.findBySharedCaseId(active.getId()).isEmpty()) {
+                guides.save(new Guide(active, userRepository.getReferenceById(userId), designatedAt.toInstant()));
+            }
+        });
+        return new GuideAddResponse(true, designatedAt);
     }
 
     @Transactional
@@ -202,6 +225,8 @@ public class TeamService {
         teamMemberRepository.findByTeamIdAndUserId(feedback.getTeam().getId(), userId)
                 .filter(TeamMember::isLeader)
                 .orElseThrow(() -> new CustomException(ErrorCode.LEADER_ONLY));
+        sharedCases.findByFeedbackIdAndStatus(feedbackId, SharedCase.Status.ACTIVE)
+                .ifPresent(active -> guides.deleteBySharedCaseId(active.getId()));
         feedback.removeFromGuide();
     }
 
