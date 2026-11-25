@@ -157,7 +157,7 @@ class UploadControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.content[0].analyzedCount").value(0))
                 .andExpect(jsonPath("$.data.content[0].period.from").value(TARGET_DATE.toString()))
                 .andExpect(jsonPath("$.data.content[0].period.to").value(TARGET_DATE.toString()))
-                .andExpect(jsonPath("$.data.content[0].status").value("UPLOADED"))
+                .andExpect(jsonPath("$.data.content[0].status").value("READY"))
                 .andExpect(jsonPath("$.data.content[1].period").value(nullValue()));
         mockMvc.perform(get(history, team.getId()).param("page", "1").param("size", "1")
                         .header(HttpHeaders.AUTHORIZATION, bearer))
@@ -173,7 +173,7 @@ class UploadControllerIntegrationTest {
     }
 
     @Test
-    void returnsStoredProgressAndFailureOnlyToUploader() throws Exception {
+    void returnsUploadLifecycleOnlyToUploader() throws Exception {
         User uploader = User.builder().name("업로더").email("status-" + UUID.randomUUID() + "@test.com")
                 .passwordHash("test-password-hash").build();
         User other = User.builder().name("다른 사용자").email("other-" + UUID.randomUUID() + "@test.com")
@@ -200,28 +200,25 @@ class UploadControllerIntegrationTest {
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("S200"))
-                .andExpect(jsonPath("$.data.status").value("UPLOADED"))
-                .andExpect(jsonPath("$.data.progress").value(0))
-                .andExpect(jsonPath("$.data.failReason").value(nullValue()))
-                .andExpect(jsonPath("$.data.savedCount").doesNotHaveJsonPath());
+                .andExpect(jsonPath("$.data.status").value("READY"))
+                .andExpect(jsonPath("$.data.analysisId").value(nullValue()))
+                .andExpect(jsonPath("$.data.progress").doesNotHaveJsonPath());
 
         upload.startAnalysis(1);
-        upload.updateProgress(60);
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("ANALYZING"))
-                .andExpect(jsonPath("$.data.progress").value(60))
-                .andExpect(jsonPath("$.data.failReason").value(nullValue()))
-                .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
+                .andExpect(jsonPath("$.data.status").value("CONSUMED"))
+                .andExpect(jsonPath("$.data.analysisId").value(nullValue()));
 
         upload.fail("분석 실패");
+        entityManager.flush();
+        jdbc.update("update uploads set uploaded_at = ? where id = ?",
+                java.time.LocalDateTime.now().minusHours(2), upload.getId());
+        entityManager.clear();
         mockMvc.perform(get(path, upload.getId()).header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("FAILED"))
-                .andExpect(jsonPath("$.data.progress").value(60))
-                .andExpect(jsonPath("$.data.failReason").value("분석 실패"))
-                .andExpect(jsonPath("$.data.savedCount").doesNotHaveJsonPath())
-                .andExpect(jsonPath("$.data.skippedDuplicateCount").doesNotHaveJsonPath());
+                .andExpect(jsonPath("$.data.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.data.analysisId").value(nullValue()));
     }
 
     @ParameterizedTest
@@ -292,6 +289,18 @@ class UploadControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.status").value("QUEUED")).andExpect(jsonPath("$.data.selectedCount").value(1));
         entityManager.flush();
         Long analysisId = jdbc.queryForObject("select id from analyses where upload_id = ?", Long.class, uploadId);
+        mockMvc.perform(get("/api/v1/uploads/{uploadId}", uploadId).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("CONSUMED"))
+                .andExpect(jsonPath("$.data.analysisId").value(analysisId))
+                .andExpect(jsonPath("$.data.progress").doesNotHaveJsonPath());
+        mockMvc.perform(get("/api/v1/teams/{teamId}/uploads", teamId).header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].analysisId").value(analysisId))
+                .andExpect(jsonPath("$.data.content[0].analysisStatus").value("QUEUED"))
+                .andExpect(jsonPath("$.data.content[0].succeededCount").value(0))
+                .andExpect(jsonPath("$.data.content[0].failedCount").value(0));
+
         String statusPath = "/api/v1/analyses/{analysisId}";
         String itemsPath = statusPath + "/items";
         mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
@@ -451,6 +460,11 @@ class UploadControllerIntegrationTest {
                     return;
                 }
                 assertThat(state).isEqualTo("SUCCEEDED");
+                mockMvc.perform(get("/api/v1/teams/{teamId}/uploads", teamId).header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.content[0].analysisStatus").value("SUCCEEDED"))
+                        .andExpect(jsonPath("$.data.content[0].succeededCount").value(1))
+                        .andExpect(jsonPath("$.data.content[0].failedCount").value(0));
                 assertThat(observedStages).containsExactly("ASSESSING", "GENERATING_FEEDBACK");
                 mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
                         .andExpect(status().isOk())
@@ -655,18 +669,16 @@ class UploadControllerIntegrationTest {
             mockMvc.perform(get("/api/v1/teams/{teamId}/uploads", teamId)
                             .header(HttpHeaders.AUTHORIZATION, bearer))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.content[0].status").value("DONE"))
+                    .andExpect(jsonPath("$.data.content[0].status").value("CONSUMED"))
                     .andExpect(jsonPath("$.data.content[0].analyzedCount").value(1))
                     .andExpect(jsonPath("$.data.content[0].period.from").value(TARGET_DATE.toString()))
                     .andExpect(jsonPath("$.data.content[0].period.to").value(TARGET_DATE.toString()));
             mockMvc.perform(get("/api/v1/uploads/{uploadId}", uploadId)
                             .header(HttpHeaders.AUTHORIZATION, bearer))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.status").value("DONE"))
-                    .andExpect(jsonPath("$.data.progress").value(100))
-                    .andExpect(jsonPath("$.data.failReason").value(nullValue()))
-                    .andExpect(jsonPath("$.data.savedCount").value(1))
-                    .andExpect(jsonPath("$.data.skippedDuplicateCount").value(0));
+                    .andExpect(jsonPath("$.data.status").value("CONSUMED"))
+                    .andExpect(jsonPath("$.data.analysisId").value(nullValue()))
+                    .andExpect(jsonPath("$.data.progress").doesNotHaveJsonPath());
             assertThat(jdbc.queryForObject("select progress from uploads where id = ?", Integer.class, uploadId))
                     .isEqualTo(100);
             assertThat(jdbc.queryForObject("select count(*) from uploads where id = ? and analyzed_at is not null",

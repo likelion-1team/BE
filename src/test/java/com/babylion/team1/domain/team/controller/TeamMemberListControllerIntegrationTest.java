@@ -17,6 +17,11 @@ import com.babylion.team1.domain.user.entity.User;
 import com.babylion.team1.support.TestAccessTokens;
 import jakarta.persistence.EntityManager;
 import java.time.LocalDate;
+import java.time.Instant;
+import com.babylion.team1.domain.analysis.entity.Analysis;
+import com.babylion.team1.domain.analysis.entity.AnalysisItem;
+import com.babylion.team1.domain.analysis.entity.AnalysisItemStatus;
+import com.babylion.team1.domain.conversation.entity.ConversationVersion;
 import java.util.UUID;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -293,6 +298,57 @@ class TeamMemberListControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.submittedMembers").value(0))
                 .andExpect(jsonPath("$.data.totalMembers").value(2))
                 .andExpect(jsonPath("$.data.analyzedConversations").value(0));
+    }
+
+    @Test
+    void countsOnlySuccessfulCurrentAnalysisItemsFromConsumedUploads() throws Exception {
+        TeamFixture fixture = createTeam(saveUser("팀장"));
+        User member = addMember(fixture, "성공 팀원");
+        User pending = addMember(fixture, "미제출 팀원");
+        TeamSettings previous = saveNextSettings(saveInitialSettings(fixture.team()), FROM, TO, 100);
+        TeamSettings current = saveNextSettings(previous, FROM, TO, 200);
+
+        saveAnalysisItem(fixture, member, current, AnalysisItemStatus.SUCCEEDED, true, false);
+        saveAnalysisItem(fixture, member, current, AnalysisItemStatus.SUCCEEDED, true, false);
+        saveAnalysisItem(fixture, pending, previous, AnalysisItemStatus.SUCCEEDED, true, false);
+        saveAnalysisItem(fixture, pending, current, AnalysisItemStatus.QUEUED, false, false);
+        saveAnalysisItem(fixture, pending, current, AnalysisItemStatus.FAILED, false, false);
+        saveAnalysisItem(fixture, pending, current, AnalysisItemStatus.SUCCEEDED, false, false);
+        saveAnalysisItem(fixture, pending, current, AnalysisItemStatus.SUCCEEDED, true, true);
+
+        listMembers(fixture.team().getId(), fixture.leader())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(3))
+                .andExpect(jsonPath("$.data[0].submitted").value(false))
+                .andExpect(jsonPath("$.data[1].submitted").value(true))
+                .andExpect(jsonPath("$.data[2].submitted").value(false));
+        submissions(fixture.team().getId(), fixture.leader()).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.submittedMembers").value(1))
+                .andExpect(jsonPath("$.data.totalMembers").value(3))
+                .andExpect(jsonPath("$.data.analyzedConversations").value(2))
+                .andExpect(jsonPath("$.data.targetCount").value(200));
+    }
+
+    private void saveAnalysisItem(TeamFixture fixture, User user, TeamSettings settings, AnalysisItemStatus status,
+                                  boolean current, boolean deleted) {
+        Upload upload = Upload.builder().team(fixture.team()).uploader(user).settings(settings)
+                .fileName("conversations.json").conversationCount(1).build();
+        upload.consume();
+        entityManager.persist(upload);
+        Conversation conversation = Conversation.builder().team(fixture.team()).user(user).upload(upload)
+                .taskType(fixture.type()).conversationDate(FROM).startedAt(FROM.atStartOfDay())
+                .externalId(UUID.randomUUID().toString()).turnCount(1).estimatedTokens(100).isSuccess(false).build();
+        entityManager.persist(conversation);
+        Instant started = Instant.parse("2026-11-01T00:00:00Z");
+        var version = ConversationVersion.builder().conversation(conversation).sourceUpload(upload)
+                .inputVersion(1).contentHash("a".repeat(64)).startedAt(started).conversationDate(FROM).turnCount(1)
+                .deletedAt(deleted ? started : null).build();
+        entityManager.persist(version);
+        var analysis = Analysis.builder().upload(upload).team(fixture.team()).user(user).settings(settings)
+                .idempotencyKey(UUID.randomUUID().toString()).requestHash("b".repeat(64)).selectedCount(1).build();
+        entityManager.persist(analysis);
+        entityManager.persist(AnalysisItem.builder().analysis(analysis).version(version).team(fixture.team()).user(user)
+                .taskType(fixture.type()).conversationDate(FROM).status(status).current(current).build());
     }
 
     private ResultActions submissions(Long teamId, User user) throws Exception {

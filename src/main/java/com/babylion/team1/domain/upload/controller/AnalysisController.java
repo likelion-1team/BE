@@ -2,9 +2,9 @@ package com.babylion.team1.domain.upload.controller;
 
 import com.babylion.team1.domain.upload.dto.request.AnalysisStartRequest;
 import com.babylion.team1.domain.upload.dto.response.AnalysisStartResponse;
-import com.babylion.team1.domain.upload.dto.response.AnalysisStatusResponse;
+import com.babylion.team1.domain.upload.dto.response.UploadStatusResponse;
 import com.babylion.team1.domain.upload.service.AnalysisStartService;
-import com.babylion.team1.domain.upload.service.AnalysisStatusService;
+import com.babylion.team1.domain.upload.service.UploadStatusService;
 import com.babylion.team1.global.response.ApiResponse;
 import java.net.URI;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -23,13 +23,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class AnalysisController {
 
     private final AnalysisStartService analysisStartService;
-    private final AnalysisStatusService analysisStatusService;
+    private final UploadStatusService uploadStatusService;
 
     @GetMapping("/api/v1/uploads/{uploadId}")
-    public ApiResponse<AnalysisStatusResponse> getStatus(
+    public ApiResponse<UploadStatusResponse> getStatus(
             @PathVariable Long uploadId,
             @AuthenticationPrincipal Long userId) {
-        return ApiResponse.success("S200", "조회 성공", analysisStatusService.getStatus(uploadId, userId));
+        return ApiResponse.success("S200", "조회 성공", uploadStatusService.getStatus(uploadId, userId));
     }
 
     @PostMapping(path = "/api/v1/uploads/{uploadId}/analyses", consumes = MediaType.APPLICATION_JSON_VALUE)

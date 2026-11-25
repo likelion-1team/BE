@@ -1,5 +1,7 @@
 package com.babylion.team1.domain.upload.service;
 
+import com.babylion.team1.domain.analysis.entity.Analysis;
+import com.babylion.team1.domain.analysis.repository.AnalysisRepository;
 import com.babylion.team1.domain.conversation.repository.ConversationRepository;
 import com.babylion.team1.domain.conversation.repository.ConversationRepository.UploadConversationCount;
 import com.babylion.team1.domain.team.repository.TeamMemberRepository;
@@ -9,6 +11,7 @@ import com.babylion.team1.domain.upload.entity.UploadStatus;
 import com.babylion.team1.domain.upload.repository.UploadRepository;
 import com.babylion.team1.global.exception.CustomException;
 import com.babylion.team1.global.exception.ErrorCode;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
@@ -26,6 +29,7 @@ public class UploadHistoryService {
 
     private final TeamMemberRepository teamMembers;
     private final UploadRepository uploads;
+    private final AnalysisRepository analyses;
     private final ConversationRepository conversations;
 
     @Transactional(readOnly = true)
@@ -39,22 +43,30 @@ public class UploadHistoryService {
 
         var history = uploads.findByTeamIdAndUploaderIdOrderByUploadedAtDescIdDesc(
                 teamId, userId, PageRequest.of(page, size));
+        var uploadIds = history.stream().map(Upload::getId).toList();
+        Map<Long, Analysis> analysisByUpload = uploadIds.isEmpty() ? Map.of() : analyses.findByUploadIdIn(uploadIds)
+                .stream().collect(Collectors.toMap(analysis -> analysis.getUpload().getId(), analysis -> analysis));
         var completedIds = history.stream()
-                .filter(upload -> upload.getStatus() == UploadStatus.DONE)
+                .filter(upload -> upload.getStatus() == UploadStatus.DONE && !analysisByUpload.containsKey(upload.getId()))
                 .map(Upload::getId)
                 .toList();
         Map<Long, Long> counts = completedIds.isEmpty() ? Map.of() : conversations.countByUploadIds(completedIds)
                 .stream().collect(Collectors.toMap(UploadConversationCount::getUploadId,
                         UploadConversationCount::getAnalyzedCount));
-        var items = history.stream().map(upload -> toItem(upload, counts.getOrDefault(upload.getId(), 0L))).toList();
+        var now = LocalDateTime.now();
+        var items = history.stream().map(upload -> toItem(upload, analysisByUpload.get(upload.getId()),
+                counts.getOrDefault(upload.getId(), 0L), now)).toList();
         return new UploadHistoryResponse(items, history.getNumber(), history.getSize(), history.getTotalElements());
     }
 
-    private UploadHistoryResponse.Item toItem(Upload upload, long analyzedCount) {
+    private UploadHistoryResponse.Item toItem(Upload upload, Analysis analysis, long legacyCount, LocalDateTime now) {
         var period = upload.getTargetFrom() == null || upload.getTargetTo() == null ? null
                 : new UploadHistoryResponse.Period(upload.getTargetFrom(), upload.getTargetTo());
         String uploadedAt = upload.getUploadedAt().atZone(ZoneId.systemDefault()).withZoneSameInstant(KST)
                 .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
-        return new UploadHistoryResponse.Item(upload.getId(), uploadedAt, analyzedCount, period, upload.getStatus());
+        long analyzedCount = analysis == null ? legacyCount : analysis.getSucceededCount();
+        return new UploadHistoryResponse.Item(upload.getId(), uploadedAt, analyzedCount, period, upload.lifecycleStatus(now),
+                analysis == null ? null : analysis.getId(), analysis == null ? null : analysis.getStatus(),
+                analysis == null ? null : analysis.getSucceededCount(), analysis == null ? null : analysis.getFailedCount());
     }
 }
