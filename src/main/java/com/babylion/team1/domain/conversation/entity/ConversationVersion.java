@@ -4,6 +4,7 @@ import com.babylion.team1.domain.upload.entity.Upload;
 import jakarta.persistence.*;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -57,6 +58,14 @@ public class ConversationVersion {
 
     @Column(name = "estimated_tokens", nullable = false)
     private int estimatedTokens;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "excluded_attachments")
+    private List<String> excludedAttachments;
+
+    public List<String> getExcludedAttachments() {
+        return excludedAttachments == null ? List.of() : List.copyOf(excludedAttachments);
+    }
 
     @Column(name = "deleted_at", columnDefinition = "DATETIME(6)")
     private Instant deletedAt;

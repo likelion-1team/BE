@@ -18,7 +18,7 @@ public record ConversationDetailResponse(Long conversationId, Long conversationV
                 version == null ? conversation.getTitle() : version.getTitle(),
                 version == null ? conversation.getStartedAt().atZone(KST).toOffsetDateTime()
                         : version.getStartedAt().atZone(KST).toOffsetDateTime(),
-                List.of(), highlights, messages.stream().map(MessageItem::from).toList());
+                version == null ? List.of() : version.getExcludedAttachments(), highlights, messages.stream().map(MessageItem::from).toList());
     }
 
     public record MessageItem(String messageId, String role, String content, OffsetDateTime createdAt) {

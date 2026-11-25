@@ -250,7 +250,8 @@ class UploadControllerIntegrationTest {
         String export = """
                 [{"id":"%s","title":"테스트","create_time":%d,"current_node":"answer","mapping":{
                   "question":{"parent":null,"children":["answer"],"message":{
-                    "author":{"role":"user"},"content":{"parts":["hello"]},"create_time":%d}},
+                    "author":{"role":"user"},"content":{"parts":["hello"]},
+                    "metadata":{"attachments":[{"name":"reports/summary.pdf","id":"internal-id"}]},"create_time":%d}},
                   "answer":{"parent":"question","children":[],"message":{
                     "author":{"role":"assistant"},"content":{"parts":["world"]},"metadata":{"model_slug":"gpt-4o"},"create_time":%d}}
                 }}]
@@ -469,6 +470,16 @@ class UploadControllerIntegrationTest {
                         .andExpect(jsonPath("$.data.items[0].analysisStatus").value("SUCCEEDED"))
                         .andExpect(jsonPath("$.data.items[0].succeededCount").value(1))
                         .andExpect(jsonPath("$.data.items[0].failedCount").value(0));
+                Long conversationId = jdbc.queryForObject("""
+                        select v.conversation_id from analysis_items i join conversation_versions v on v.id = i.version_id
+                        where i.analysis_id = ?
+                        """, Long.class, analysisId);
+                mockMvc.perform(get("/api/v1/conversations/{conversationId}", conversationId)
+                                .header(HttpHeaders.AUTHORIZATION, bearer))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.excludedAttachments.length()").value(1))
+                        .andExpect(jsonPath("$.data.excludedAttachments[0]").value("summary.pdf"))
+                        .andExpect(jsonPath("$.data.messages[0].content").value("hello"));
                 assertThat(observedStages).containsExactly("ASSESSING", "GENERATING_FEEDBACK");
                 mockMvc.perform(get(statusPath, analysisId).header(HttpHeaders.AUTHORIZATION, bearer))
                         .andExpect(status().isOk())
