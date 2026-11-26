@@ -12,6 +12,8 @@ Java 17, Node 24, MySQL 8.4가 필요합니다. MySQL은 운영 DB와 분리해 
 4. FE에서 `API_PROXY_TARGET=http://127.0.0.1:8081`, `VITE_API_BASE_URL=/api/v1`, `VITE_AUTH_TRANSPORT=auto`, `VITE_EMAIL_CHECK_METHOD=GET`을 설정하고 `npm run dev -- --port 5175 --strictPort`.
 5. http://127.0.0.1:5175/login 에서 로그인합니다. `/demo`는 FE 전용 시뮬레이션이므로 이 백엔드 검증에서는 일반 로그인 화면을 사용합니다.
 
+시드가 완료된 뒤 BE 디렉터리에서 `node scripts/verify-local-demo.mjs`를 실행하면 새 팀을 만들지 않고 마지막 시드 팀을 재검증합니다. 6개 계정의 실제 로그인, 본인 대화만 반환되는지, 팀장도 팀원 개인 피드백·분석에 접근하지 못하는지, 팀원 설정 변경 거절, 팀 집계의 토큰 합계와 성공·재작업 비율을 검사합니다. 결과는 Git에서 제외되는 `demo-fixtures/local-demo-verification.json`에 저장하며 토큰과 비밀번호는 기록하지 않습니다. 로그인 세션은 종료 시 로그아웃합니다. 브라우저 시현과 검증 스크립트는 동시에 실행하지 마세요.
+
 로컬 계정은 `demo.leader@local.test`(팀장), `demo.member1@local.test`~`demo.member5@local.test`(팀원), 공통 비밀번호 `DemoOnly1234!`입니다. 운영 서버용 계정이 아닙니다. 다시 시드하면 같은 계정에 새 합성 팀을 만듭니다. 기존 팀을 지우지 않습니다.
 
 ## 운영 분리
@@ -32,3 +34,5 @@ Java 17, Node 24, MySQL 8.4가 필요합니다. MySQL은 운영 DB와 분리해 
 `demo-fixtures/conversations-duplicate.json`은 같은 대화가 반복된 입력, `conversations-conflict.json`은 같은 ID에 내용이 다른 입력입니다. 전자는 한 번만 후보로 반환하고 후자는 400 `CONFLICTING_CONVERSATION_ID`로 거절합니다. JSON·ZIP에 같은 정책을 적용합니다. 기간 밖 첫 항목과 기간 안 두 번째 항목이 같은 ID인 경우에도 임의로 섞어 분석하지 않습니다.
 
 이것은 실제 외부 AI 품질·운영 DB 이관·운영 배포 검증을 대신하지 않습니다. BE 규칙에 따라 기능 브랜치를 `develop` 대상으로 리뷰합니다.
+
+현재 시연 데이터의 표현 범위와 보완 우선순위는 [시현 점검 기록](DEMO-REVIEW-2026-11-26.md)을 참고하세요.
