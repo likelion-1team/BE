@@ -9,6 +9,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -71,6 +72,33 @@ class TeamControllerIntegrationTest {
     private TeamSettingsRepository teamSettingsRepository;
     @MockitoSpyBean
     private TeamGoalRepository teamGoalRepository;
+
+    @Test
+    void promptComparisonRequiresTeamMembershipAndRejectsBlankPrompts() throws Exception {
+        User leader = saveUser();
+        User member = saveUser();
+        User outsider = saveUser();
+        Team team = saveTeam("Prompt comparison", leader);
+        teamMemberRepository.save(TeamMember.member(team, member));
+        String path = PATH + "/" + team.getId() + "/prompt-comparison";
+
+        mockMvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mockMvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, bearer(outsider)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("NOT_A_MEMBER"));
+        mockMvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, bearer(member)))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andExpect(jsonPath("$.data.configured").isBoolean())
+                .andExpect(jsonPath("$.data.model").isString());
+        mockMvc.perform(post(path).header(HttpHeaders.AUTHORIZATION, bearer(member))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"task":"A shared task","baselinePrompt":" ","improvedPrompt":"Short answer"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("baselinePrompt"));
+    }
 
     @Test
     void createsTeamWithLeaderAndVersionZeroSettingsAndGoals() throws Exception {
