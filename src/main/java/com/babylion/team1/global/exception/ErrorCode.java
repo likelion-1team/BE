@@ -70,6 +70,7 @@ public enum ErrorCode {
     NOT_UPLOADER(HttpStatus.FORBIDDEN, "NOT_UPLOADER", "파일을 올린 본인만 분석할 수 있습니다."),
     UPLOAD_NOT_FOUND(HttpStatus.NOT_FOUND, "UPLOAD_NOT_FOUND", "업로드를 찾을 수 없습니다."),
     ANALYSIS_IN_PROGRESS(HttpStatus.CONFLICT, "ANALYSIS_IN_PROGRESS", "이미 분석 중입니다."),
+    PROMPT_COMPARISON_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "PROMPT_COMPARISON_UNAVAILABLE", "OpenAI 비교 기능이 설정되지 않았습니다."),
 
     // Feedback
     NOT_CONVERSATION_OWNER(HttpStatus.FORBIDDEN, "NOT_CONVERSATION_OWNER", "본인 대화만 조회할 수 있습니다."),
