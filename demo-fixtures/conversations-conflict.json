@@ -1,0 +1,94 @@
+[
+  {
+    "id": "demo-1-0",
+    "title": "[DEMO] 고객 안내 1",
+    "create_time": 1794970800,
+    "current_node": "a",
+    "mapping": {
+      "u": {
+        "parent": null,
+        "children": [
+          "a"
+        ],
+        "message": {
+          "author": {
+            "role": "user"
+          },
+          "create_time": 1794970800,
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "[DEMO] 가상의 카페 고객에게 예약 안내를 정중한 한 문장으로 작성해줘."
+            ]
+          },
+          "metadata": {}
+        }
+      },
+      "a": {
+        "parent": "u",
+        "children": [],
+        "message": {
+          "author": {
+            "role": "assistant"
+          },
+          "create_time": 1794970801,
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "[DEMO] 예약하신 시간에 방문해 주시면 감사하겠습니다."
+            ]
+          },
+          "metadata": {
+            "model_slug": "gpt-4o"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "demo-1-0",
+    "title": "[DEMO] 고객 안내 1",
+    "create_time": 1794970800,
+    "current_node": "a",
+    "mapping": {
+      "u": {
+        "parent": null,
+        "children": [
+          "a"
+        ],
+        "message": {
+          "author": {
+            "role": "user"
+          },
+          "create_time": 1794970800,
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "[DEMO] 같은 ID에 다른 내용"
+            ]
+          },
+          "metadata": {}
+        }
+      },
+      "a": {
+        "parent": "u",
+        "children": [],
+        "message": {
+          "author": {
+            "role": "assistant"
+          },
+          "create_time": 1794970801,
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "[DEMO] 예약하신 시간에 방문해 주시면 감사하겠습니다."
+            ]
+          },
+          "metadata": {
+            "model_slug": "gpt-4o"
+          }
+        }
+      }
+    }
+  }
+]

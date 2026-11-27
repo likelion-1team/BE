@@ -23,6 +23,7 @@ public enum ErrorCode {
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE", "지원하지 않는 Content-Type입니다."),
     ANALYSIS_ALREADY_COMPLETED(HttpStatus.CONFLICT, "ANALYSIS_ALREADY_COMPLETED", "이미 분석이 완료되었습니다."),
     DUPLICATE_CONTENT(HttpStatus.CONFLICT, "DUPLICATE_CONTENT", "이미 등록된 대화 내용입니다."),
+    CONFLICTING_CONVERSATION_ID(HttpStatus.BAD_REQUEST, "CONFLICTING_CONVERSATION_ID", "같은 대화 ID에 서로 다른 내용이 있습니다. 파일의 중복 대화를 정리한 뒤 다시 올려 주세요."),
     IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", "같은 키로 다른 요청을 보낼 수 없습니다."),
     UPLOAD_CONSUMED(HttpStatus.CONFLICT, "UPLOAD_CONSUMED", "이미 분석이 확정된 업로드입니다."),
     UPLOAD_EXPIRED(HttpStatus.GONE, "UPLOAD_EXPIRED", "분석할 원본 파일의 보관 기간이 만료되었습니다."),
@@ -69,6 +70,7 @@ public enum ErrorCode {
     NOT_UPLOADER(HttpStatus.FORBIDDEN, "NOT_UPLOADER", "파일을 올린 본인만 분석할 수 있습니다."),
     UPLOAD_NOT_FOUND(HttpStatus.NOT_FOUND, "UPLOAD_NOT_FOUND", "업로드를 찾을 수 없습니다."),
     ANALYSIS_IN_PROGRESS(HttpStatus.CONFLICT, "ANALYSIS_IN_PROGRESS", "이미 분석 중입니다."),
+    PROMPT_COMPARISON_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "PROMPT_COMPARISON_UNAVAILABLE", "OpenAI 비교 기능이 설정되지 않았습니다."),
 
     // Feedback
     NOT_CONVERSATION_OWNER(HttpStatus.FORBIDDEN, "NOT_CONVERSATION_OWNER", "본인 대화만 조회할 수 있습니다."),

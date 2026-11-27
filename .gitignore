@@ -37,4 +37,7 @@ out/
 .vscode/
 
 ### local ###
+/.env
 src/main/resources/application-local.yaml
+demo-fixtures/local-demo-result.json
+demo-fixtures/local-demo-verification.json
